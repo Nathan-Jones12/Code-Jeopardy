@@ -1,0 +1,43 @@
+:root {
+  --jeopardy-blue: #060CE9;
+  --jeopardy-bg: #0A1845;
+  --jeopardy-bg-2: #081234;
+  --jeopardy-gold: #FFCC00;
+  --jeopardy-light: #FFFFFF;
+  --jeopardy-shadow: rgba(0, 0, 0, 0.5);
+  --serif: Georgia, 'Times New Roman', 'Times', serif;
+  --sans: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--serif);
+  background: var(--jeopardy-bg);
+  color: var(--jeopardy-light);
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, button {
+  font-family: inherit;
+}
