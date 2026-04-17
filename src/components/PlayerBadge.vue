@@ -4,18 +4,20 @@ defineProps({
   score: { type: Number, default: 0 },
   isHost: { type: Boolean, default: false },
   isSelf: { type: Boolean, default: false },
-  isBuzzed: { type: Boolean, default: false }
+  isBuzzed: { type: Boolean, default: false },
+  isTurn: { type: Boolean, default: false }
 });
 </script>
 
 <template>
-  <div class="badge" :class="{ self: isSelf, buzzed: isBuzzed }">
+  <div class="badge" :class="{ self: isSelf, buzzed: isBuzzed, turn: isTurn }">
     <span class="name">
       {{ name }}
       <span v-if="isHost" class="tag">HOST</span>
       <span v-if="isSelf" class="tag you">YOU</span>
     </span>
     <span class="score" :class="{ neg: score < 0 }">${{ score }}</span>
+    <span v-if="isTurn" class="turn-indicator">Picking</span>
   </div>
 </template>
 
@@ -31,10 +33,16 @@ defineProps({
   gap: 0.2rem;
   min-width: 130px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
 }
 
 .badge.self {
   border-color: var(--jeopardy-gold);
+}
+
+.badge.turn {
+  border-color: #4cff7c;
+  box-shadow: 0 0 12px rgba(76, 255, 124, 0.5);
 }
 
 .badge.buzzed {
@@ -83,5 +91,13 @@ defineProps({
 
 .score.neg {
   color: #ff7070;
+}
+
+.turn-indicator {
+  font-size: 0.65rem;
+  color: #4cff7c;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: bold;
 }
 </style>

@@ -13,7 +13,6 @@ onMounted(() => {
     router.replace({ name: 'home' });
     return;
   }
-  // If we refreshed on the lobby URL without an active subscription, re-subscribe.
   if (!store.room || store.roomCode !== props.roomCode) {
     store.subscribe(props.roomCode);
   }
@@ -68,6 +67,12 @@ function copyCode() {
       <p v-if="store.players.length < 2" class="waiting">
         Waiting for more players to join…
       </p>
+    </div>
+
+    <div class="info">
+      <p>Game includes <strong>3 rounds</strong>:</p>
+      <p>Round 1 (Jeopardy) → Round 2 (Double Jeopardy) → Final Jeopardy</p>
+      <p>The computer checks answers automatically and tracks turns.</p>
     </div>
 
     <div class="actions">
@@ -140,6 +145,16 @@ function copyCode() {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
+}
+
+.info {
+  text-align: center;
+  color: #93a6d1;
+  font-size: 0.9rem;
+}
+
+.info p {
+  margin: 0.2rem 0;
 }
 
 .waiting {

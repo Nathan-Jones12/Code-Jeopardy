@@ -2,7 +2,8 @@
 defineProps({
   value: { type: Number, required: true },
   played: { type: Boolean, default: false },
-  canPick: { type: Boolean, default: false }
+  canPick: { type: Boolean, default: false },
+  dailyDouble: { type: Boolean, default: false }
 });
 </script>
 
@@ -66,7 +67,6 @@ defineProps({
 @media (max-width: 900px) {
   .tile {
     font-size: 1.1rem;
-    aspect-ratio: 5 / 3;
   }
 }
 </style>

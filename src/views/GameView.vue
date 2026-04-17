@@ -1,10 +1,11 @@
 <script setup>
-import { onMounted, watch } from 'vue';
+import { onMounted, watch, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useGameStore } from '../stores/gameStore.js';
 import JeopardyBoard from '../components/JeopardyBoard.vue';
 import ClueModal from '../components/ClueModal.vue';
 import Scoreboard from '../components/Scoreboard.vue';
+import FinalJeopardy from '../components/FinalJeopardy.vue';
 
 const props = defineProps({ roomCode: String });
 const router = useRouter();
@@ -31,6 +32,21 @@ watch(
   }
 );
 
+const roundLabel = computed(() => {
+  if (store.round === 1) return 'Jeopardy! — Round 1';
+  if (store.round === 2) return 'Double Jeopardy!';
+  if (store.round === 3) return 'Final Jeopardy!';
+  return '';
+});
+
+const canPick = computed(() => store.isMyTurn && !store.activeClue);
+
+const lastResult = computed(() => store.lastResult);
+const showResult = computed(() => {
+  if (!lastResult.value) return false;
+  return Date.now() - lastResult.value.at < 3000;
+});
+
 function onPick({ col, row }) {
   store.pickClue(col, row);
 }
@@ -39,20 +55,54 @@ function onPick({ col, row }) {
 <template>
   <div class="game">
     <div class="top-bar">
+      <span class="round-label">{{ roundLabel }}</span>
       <span class="room-code">Room {{ roomCode }}</span>
-      <span class="hint" v-if="store.isHost">You are the host</span>
     </div>
 
-    <div class="board-area" v-if="store.board.length">
-      <JeopardyBoard :board="store.board" :can-pick="store.isHost && !store.activeClue" @pick="onPick" />
+    <div v-if="store.round < 3" class="turn-bar" :class="{ myturn: store.isMyTurn }">
+      <template v-if="store.isMyTurn">
+        Your turn — pick a clue!
+      </template>
+      <template v-else>
+        {{ store.currentTurnName }}'s turn
+      </template>
     </div>
-    <div v-else class="loading">Setting up the board…</div>
+
+    <!-- Result flash -->
+    <transition name="flash">
+      <div v-if="showResult && lastResult" class="result-flash" :class="lastResult.correct ? 'correct' : 'wrong'">
+        <template v-if="lastResult.timeout">
+          Time's up! Answer: <strong>{{ lastResult.correctAnswer }}</strong>
+        </template>
+        <template v-else-if="lastResult.correct">
+          {{ lastResult.playerName }} got it!
+          <strong>+${{ lastResult.value }}</strong>
+          <template v-if="lastResult.dailyDouble"> (Daily Double)</template>
+        </template>
+        <template v-else>
+          {{ lastResult.playerName }} was wrong.
+          <strong>-${{ lastResult.value }}</strong>
+          <span class="correct-ans">Answer: {{ lastResult.correctAnswer }}</span>
+        </template>
+      </div>
+    </transition>
+
+    <!-- Board rounds 1 & 2 -->
+    <div v-if="store.round < 3 && store.board.length" class="board-area">
+      <JeopardyBoard :board="store.board" :can-pick="canPick" @pick="onPick" />
+    </div>
+
+    <!-- Final Jeopardy -->
+    <FinalJeopardy v-if="store.round === 3" />
+
+    <div v-if="!store.board.length && store.round < 3" class="loading">Setting up the board…</div>
 
     <Scoreboard
       :players="store.players"
       :host-id="store.room && store.room.hostId"
       :self-id="store.playerId"
       :buzzed-id="store.buzzedPlayerId"
+      :current-turn-id="store.currentTurnId"
     />
 
     <ClueModal v-if="store.activeClue" />
@@ -72,23 +122,72 @@ function onPick({ col, row }) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.7rem 1.2rem;
+  padding: 0.6rem 1.2rem;
   background: var(--jeopardy-bg-2);
   border-bottom: 2px solid var(--jeopardy-gold);
 }
 
-.room-code {
+.round-label {
   color: var(--jeopardy-gold);
   font-weight: bold;
-  letter-spacing: 0.15em;
-  font-size: 1.1rem;
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  letter-spacing: 0.05em;
 }
 
-.hint {
+.room-code {
   color: #c9d4ff;
-  font-style: italic;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  letter-spacing: 0.12em;
 }
+
+.turn-bar {
+  text-align: center;
+  padding: 0.5rem 1rem;
+  font-size: 1.05rem;
+  color: #c9d4ff;
+  background: rgba(0, 0, 0, 0.3);
+  font-style: italic;
+}
+
+.turn-bar.myturn {
+  color: var(--jeopardy-gold);
+  font-weight: bold;
+  font-style: normal;
+  background: rgba(255, 204, 0, 0.12);
+}
+
+.result-flash {
+  text-align: center;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-weight: bold;
+  animation: slideIn 0.3s ease;
+}
+
+.result-flash.correct {
+  background: rgba(26, 138, 58, 0.6);
+  color: #fff;
+}
+
+.result-flash.wrong {
+  background: rgba(176, 38, 29, 0.6);
+  color: #fff;
+}
+
+.correct-ans {
+  margin-left: 0.8rem;
+  opacity: 0.85;
+  font-weight: normal;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.flash-enter-active { animation: slideIn 0.3s ease; }
+.flash-leave-active { animation: slideIn 0.3s ease reverse; }
 
 .board-area {
   flex: 1;

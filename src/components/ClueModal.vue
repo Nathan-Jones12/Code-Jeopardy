@@ -1,28 +1,101 @@
 <script setup>
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useGameStore } from '../stores/gameStore.js';
 
 const store = useGameStore();
 const answer = ref('');
+const secondsLeft = ref(15);
+let timerInterval = null;
 
 const clue = computed(() => store.activeClue);
+const phase = computed(() => clue.value?.phase || 'open');
 const buzzedId = computed(() => store.buzzedPlayerId);
+const iBuzzedIn = computed(() => buzzedId.value === store.playerId);
+const failed = computed(() => store.failedPlayers);
+const iAlreadyFailed = computed(() => failed.value.includes(store.playerId));
+const canBuzz = computed(() =>
+  phase.value === 'open' && !buzzedId.value && !iAlreadyFailed.value
+);
+
 const buzzedName = computed(() => {
   const id = buzzedId.value;
   if (!id) return '';
   const p = store.players.find(pl => pl.id === id);
   return p ? p.name : '';
 });
-const iBuzzedIn = computed(() => buzzedId.value === store.playerId);
 
 const categoryName = computed(() => {
   if (!clue.value) return '';
   return store.board[clue.value.col]?.category || '';
 });
 
-function buzz() {
-  store.buzzIn();
+const clueValue = computed(() => {
+  if (!clue.value) return 0;
+  if (clue.value.dailyDouble && clue.value.wager) return clue.value.wager;
+  return clue.value.value;
+});
+
+const isMyTurn = computed(() => store.isMyTurn);
+
+// Daily Double wager
+const wager = ref(200);
+const myScore = computed(() => {
+  const p = store.room?.players?.[store.playerId];
+  return p ? p.score : 0;
+});
+const maxWager = computed(() => {
+  const roundMax = store.round === 1 ? 1000 : 2000;
+  return Math.max(roundMax, myScore.value);
+});
+
+// Timer
+function startTimer(durationSeconds) {
+  stopTimer();
+  const openedAt = clue.value?.openedAt || Date.now();
+  const elapsed = (Date.now() - openedAt) / 1000;
+  secondsLeft.value = Math.max(0, Math.ceil(durationSeconds - elapsed));
+
+  timerInterval = setInterval(() => {
+    const now = Date.now();
+    const e = (now - openedAt) / 1000;
+    secondsLeft.value = Math.max(0, Math.ceil(durationSeconds - e));
+
+    if (secondsLeft.value <= 0) {
+      stopTimer();
+      handleTimeout();
+    }
+  }, 250);
 }
+
+function stopTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = null;
+}
+
+function handleTimeout() {
+  // Any connected client can trigger timeout — first write wins
+  if (store.activeClue) {
+    store.timeoutClue();
+  }
+}
+
+// Start/restart timer on phase changes
+watch(
+  () => [clue.value?.phase, clue.value?.openedAt],
+  () => {
+    answer.value = '';
+    if (!clue.value) { stopTimer(); return; }
+    if (clue.value.phase === 'open') startTimer(15);
+    else if (clue.value.phase === 'dd_answer') startTimer(15);
+    else stopTimer();
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => stopTimer());
+
+// Actions
+function buzz() { store.buzzIn(); }
 
 function submitAnswer() {
   const t = answer.value.trim();
@@ -30,69 +103,133 @@ function submitAnswer() {
   store.submitAnswer(t);
 }
 
-function markCorrect() {
-  store.resolveClue(true);
-}
-function markWrong() {
-  store.resolveClue(false);
-}
-function skipClue() {
-  store.closeClueUnanswered();
+function handleDDReveal() {
+  store.startDailyDoubleWager();
 }
 
-watch(clue, () => {
-  answer.value = '';
-});
+function submitWager() {
+  const w = Math.min(Math.max(5, wager.value), maxWager.value);
+  store.submitDailyDoubleWager(w);
+}
+
+function submitDDAnswer() {
+  const t = answer.value.trim();
+  if (!t) return;
+  store.submitDailyDoubleAnswer(t);
+}
 </script>
 
 <template>
   <div v-if="clue" class="overlay">
-    <div class="modal">
-      <div class="ribbon">
-        <span class="cat">{{ categoryName }}</span>
-        <span class="value">${{ clue.value }}</span>
-      </div>
+    <div class="modal" :class="{ 'dd-modal': clue.dailyDouble }">
 
-      <div class="clue-text">
-        {{ clue.definition }}
-      </div>
+      <!-- DAILY DOUBLE REVEAL -->
+      <template v-if="phase === 'dd_reveal'">
+        <div class="dd-splash">
+          <h1>DAILY DOUBLE!</h1>
+          <p v-if="isMyTurn">It's your pick — you answer alone.</p>
+          <p v-else>{{ store.currentTurnName }} found a Daily Double!</p>
+          <button v-if="isMyTurn" class="gold-btn" @click="handleDDReveal">
+            Set Wager
+          </button>
+        </div>
+      </template>
 
-      <div class="interact">
-        <!-- Nobody buzzed yet -->
-        <template v-if="!buzzedId">
-          <button class="buzz-btn" @click="buzz">BUZZ IN</button>
-          <p class="hint">First to buzz gets to answer.</p>
-        </template>
-
-        <!-- Someone buzzed -->
-        <template v-else>
-          <p class="buzzed">
-            <strong>{{ buzzedName }}</strong> buzzed in!
-          </p>
-
-          <div v-if="iBuzzedIn" class="answer-row">
+      <!-- DAILY DOUBLE WAGER -->
+      <template v-else-if="phase === 'dd_wager'">
+        <div class="ribbon">
+          <span class="cat">{{ categoryName }} — DAILY DOUBLE</span>
+          <span class="value">${{ clueValue }}</span>
+        </div>
+        <div v-if="isMyTurn" class="dd-wager-panel">
+          <p>Your score: <strong>${{ myScore }}</strong></p>
+          <p>Wager up to <strong>${{ maxWager }}</strong></p>
+          <div class="wager-row">
             <input
-              v-model="answer"
-              placeholder="Type your answer…"
-              @keyup.enter="submitAnswer"
-              autofocus
+              v-model.number="wager"
+              type="number"
+              :min="5"
+              :max="maxWager"
+              @keyup.enter="submitWager"
             />
-            <button class="submit-btn" @click="submitAnswer">Submit</button>
+            <button class="gold-btn" @click="submitWager">Lock Wager</button>
           </div>
-          <p v-else-if="store.room && store.room.answerText" class="their-answer">
-            Their answer: <em>{{ store.room.answerText }}</em>
-          </p>
-          <p v-else class="hint">Waiting for answer…</p>
-        </template>
-      </div>
+        </div>
+        <p v-else class="waiting">{{ store.currentTurnName }} is setting their wager…</p>
+      </template>
 
-      <div v-if="store.isHost" class="host-controls">
-        <span class="host-label">HOST:</span>
-        <button class="correct" :disabled="!buzzedId" @click="markCorrect">Mark Correct (+${{ clue.value }})</button>
-        <button class="wrong" :disabled="!buzzedId" @click="markWrong">Mark Incorrect (-${{ clue.value }})</button>
-        <button class="skip" @click="skipClue">Skip / No one got it</button>
-        <p class="answer-reveal">Answer: <strong>{{ clue.term }}</strong></p>
-      </div>
+      <!-- DAILY DOUBLE ANSWER -->
+      <template v-else-if="phase === 'dd_answer'">
+        <div class="ribbon">
+          <span class="cat">{{ categoryName }} — DAILY DOUBLE</span>
+          <span class="value">${{ clueValue }}</span>
+        </div>
+        <div class="timer-bar">
+          <div class="timer-fill" :style="{ width: (secondsLeft / 15 * 100) + '%' }"></div>
+          <span class="timer-text">{{ secondsLeft }}s</span>
+        </div>
+        <div class="clue-text">{{ clue.definition }}</div>
+        <div v-if="isMyTurn" class="answer-row">
+          <input
+            v-model="answer"
+            placeholder="Type your answer…"
+            @keyup.enter="submitDDAnswer"
+            autofocus
+          />
+          <button class="submit-btn" @click="submitDDAnswer">Submit</button>
+        </div>
+        <p v-else class="waiting">{{ store.currentTurnName }} is answering…</p>
+      </template>
+
+      <!-- REGULAR CLUE -->
+      <template v-else-if="phase === 'open'">
+        <div class="ribbon">
+          <span class="cat">{{ categoryName }}</span>
+          <span class="value">${{ clue.value }}</span>
+        </div>
+        <div class="timer-bar">
+          <div
+            class="timer-fill"
+            :class="{ danger: secondsLeft <= 5 }"
+            :style="{ width: (secondsLeft / 15 * 100) + '%' }"
+          ></div>
+          <span class="timer-text">{{ secondsLeft }}s</span>
+        </div>
+        <div class="clue-text">{{ clue.definition }}</div>
+
+        <div class="interact">
+          <!-- Nobody buzzed yet -->
+          <template v-if="!buzzedId">
+            <button
+              v-if="canBuzz"
+              class="buzz-btn"
+              @click="buzz"
+            >BUZZ IN</button>
+            <p v-else-if="iAlreadyFailed" class="hint">
+              You already answered wrong. Wait for others.
+            </p>
+            <p v-else class="hint">Waiting for a player to buzz…</p>
+          </template>
+
+          <!-- Someone buzzed -->
+          <template v-else>
+            <p class="buzzed">
+              <strong>{{ buzzedName }}</strong> buzzed in!
+            </p>
+            <div v-if="iBuzzedIn" class="answer-row">
+              <input
+                v-model="answer"
+                placeholder="Type your answer…"
+                @keyup.enter="submitAnswer"
+                autofocus
+              />
+              <button class="submit-btn" @click="submitAnswer">Submit</button>
+            </div>
+            <p v-else class="hint">Waiting for answer…</p>
+          </template>
+        </div>
+      </template>
+
     </div>
   </div>
 </template>
@@ -126,6 +263,11 @@ watch(clue, () => {
   animation: popin 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.3);
 }
 
+.dd-modal {
+  border-color: #ff4444;
+  box-shadow: 0 0 60px rgba(255, 68, 68, 0.5);
+}
+
 @keyframes popin {
   from { transform: scale(0.7) rotateX(-15deg); opacity: 0; }
   to { transform: scale(1) rotateX(0); opacity: 1; }
@@ -136,7 +278,7 @@ watch(clue, () => {
   justify-content: space-between;
   border-bottom: 2px solid var(--jeopardy-gold);
   padding-bottom: 0.6rem;
-  margin-bottom: 1.2rem;
+  margin-bottom: 0.8rem;
 }
 
 .cat {
@@ -153,6 +295,39 @@ watch(clue, () => {
   font-weight: bold;
 }
 
+/* Timer */
+.timer-bar {
+  position: relative;
+  height: 28px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.timer-fill {
+  height: 100%;
+  background: var(--jeopardy-gold);
+  transition: width 0.25s linear;
+  border-radius: 4px;
+}
+
+.timer-fill.danger {
+  background: #ff4444;
+}
+
+.timer-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  font-weight: bold;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+}
+
 .clue-text {
   color: #fff;
   font-family: var(--serif);
@@ -166,7 +341,7 @@ watch(clue, () => {
 
 .interact {
   text-align: center;
-  min-height: 120px;
+  min-height: 100px;
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
@@ -199,6 +374,13 @@ watch(clue, () => {
   margin: 0;
   color: #c9d4ff;
   font-style: italic;
+}
+
+.waiting {
+  margin: 1rem 0;
+  color: #b9c7ff;
+  font-style: italic;
+  text-align: center;
 }
 
 .buzzed {
@@ -236,65 +418,79 @@ watch(clue, () => {
   border-radius: 4px;
 }
 
-.their-answer {
-  color: #fff;
-  margin: 0;
-  font-size: 1.2rem;
+/* Daily Double Splash */
+.dd-splash {
+  text-align: center;
+  padding: 3rem 1rem;
 }
 
-.host-controls {
-  border-top: 2px solid rgba(255, 204, 0, 0.35);
-  margin-top: 1rem;
-  padding-top: 0.8rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.host-label {
+.dd-splash h1 {
+  font-family: var(--serif);
+  font-size: 3.5rem;
   color: var(--jeopardy-gold);
-  font-weight: bold;
-  letter-spacing: 0.1em;
-  font-size: 0.85rem;
-  margin-right: 0.3rem;
+  text-shadow: 3px 3px 0 #000, 0 0 40px rgba(255, 68, 68, 0.7);
+  margin: 0 0 1rem;
+  animation: ddpulse 0.8s ease infinite alternate;
 }
 
-.host-controls button {
-  padding: 0.5rem 0.9rem;
-  border: 2px solid #000;
-  border-radius: 4px;
+@keyframes ddpulse {
+  from { text-shadow: 3px 3px 0 #000, 0 0 20px rgba(255, 68, 68, 0.5); }
+  to   { text-shadow: 3px 3px 0 #000, 0 0 50px rgba(255, 68, 68, 1); }
+}
+
+.dd-splash p {
+  color: #fff;
+  font-size: 1.1rem;
+  margin: 0 0 1.5rem;
+}
+
+.gold-btn {
+  background: var(--jeopardy-gold);
+  color: #000;
+  border: none;
+  padding: 0.8rem 1.8rem;
+  font-size: 1.2rem;
   font-weight: bold;
   font-family: var(--serif);
-  font-size: 0.9rem;
+  border-radius: 4px;
 }
 
-.correct {
-  background: #1a8a3a;
-  color: #fff;
-}
-.wrong {
-  background: #b0261d;
-  color: #fff;
-}
-.skip {
-  background: #555;
-  color: #fff;
-}
-.host-controls button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.gold-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-.answer-reveal {
-  flex-basis: 100%;
-  margin: 0.3rem 0 0;
-  color: var(--jeopardy-gold);
-  font-size: 0.95rem;
+.dd-wager-panel {
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+.dd-wager-panel p {
+  margin: 0 0 0.7rem;
+  color: #fff;
+}
+
+.wager-row {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.wager-row input {
+  width: 120px;
+  padding: 0.6rem 0.8rem;
+  border: 2px solid #000;
+  border-radius: 4px;
+  font-size: 1.1rem;
+  background: #fff;
+  color: #000;
+  text-align: center;
 }
 
 @media (max-width: 900px) {
   .clue-text { font-size: 1.3rem; padding: 1rem 0.3rem 1.5rem; }
   .buzz-btn { font-size: 1.2rem; padding: 0.8rem 1.8rem; }
+  .dd-splash h1 { font-size: 2.5rem; }
 }
 </style>

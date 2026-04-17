@@ -18,6 +18,7 @@ const emit = defineEmits(['tile']);
       :key="ri"
       :value="clue.value"
       :played="clue.played"
+      :daily-double="clue.dailyDouble"
       :can-pick="canPick"
       @click="$emit('tile', ri)"
     />

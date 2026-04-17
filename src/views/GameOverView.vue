@@ -31,6 +31,16 @@ const ranked = computed(() =>
 
 const winner = computed(() => ranked.value[0]);
 
+// Final Jeopardy results (if we came from final)
+const finalResults = computed(() => {
+  const f = store.finalState;
+  if (!f || !f.results) return null;
+  return store.players.map(p => ({
+    ...p,
+    ...f.results[p.id]
+  })).sort((a, b) => b.score - a.score);
+});
+
 function newGame() {
   store.newGame();
 }
@@ -45,7 +55,7 @@ function leave() {
   <div class="gameover">
     <h1 class="title">Game Over</h1>
     <p v-if="winner" class="winner">
-      🏆 Winner: <span class="winner-name">{{ winner.name }}</span>
+      Winner: <span class="winner-name">{{ winner.name }}</span>
       with ${{ winner.score }}
     </p>
 
@@ -62,6 +72,19 @@ function leave() {
           <span class="score">${{ p.score }}</span>
         </li>
       </ol>
+    </div>
+
+    <div v-if="finalResults" class="panel">
+      <h2>Final Jeopardy Breakdown</h2>
+      <div class="final-detail" v-for="r in finalResults" :key="r.id">
+        <span class="name">{{ r.name }}</span>
+        <span>wagered ${{ r.wager || 0 }}</span>
+        <span>answered "{{ r.answer || '(none)' }}"</span>
+        <span :class="r.correct ? 'yes' : 'no'">{{ r.correct ? 'Correct' : 'Wrong' }}</span>
+      </div>
+      <p class="correct-answer" v-if="store.finalState">
+        Correct answer: <strong>{{ store.finalState.term }}</strong>
+      </p>
     </div>
 
     <div class="actions">
@@ -151,6 +174,31 @@ function leave() {
 .score {
   font-family: var(--serif);
   font-weight: bold;
+}
+
+.final-detail {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 204, 0, 0.15);
+  font-size: 0.9rem;
+  color: #c9d4ff;
+}
+
+.final-detail .name {
+  color: #fff;
+  font-weight: bold;
+}
+
+.yes { color: #4cff7c; font-weight: bold; }
+.no { color: #ff7070; font-weight: bold; }
+
+.correct-answer {
+  color: var(--jeopardy-gold);
+  text-align: center;
+  margin: 0.8rem 0 0;
 }
 
 .actions {

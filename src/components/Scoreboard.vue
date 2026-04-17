@@ -5,7 +5,8 @@ defineProps({
   players: { type: Array, required: true },
   hostId: { type: String, default: '' },
   selfId: { type: String, default: '' },
-  buzzedId: { type: String, default: '' }
+  buzzedId: { type: String, default: '' },
+  currentTurnId: { type: String, default: '' }
 });
 </script>
 
@@ -19,6 +20,7 @@ defineProps({
       :is-host="p.id === hostId"
       :is-self="p.id === selfId"
       :is-buzzed="p.id === buzzedId"
+      :is-turn="p.id === currentTurnId"
     />
   </div>
 </template>
