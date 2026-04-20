@@ -79,7 +79,7 @@ function onPick({ col, row }) {
           <strong>+${{ lastResult.value }}</strong>
           <template v-if="lastResult.dailyDouble"> (Daily Double)</template>
         </template>
-        <template v-else>
+        <template v-else-if="lastResult.timeout">
           {{ lastResult.playerName }} was wrong.
           <strong>-${{ lastResult.value }}</strong>
           <span class="correct-ans">Answer: {{ lastResult.correctAnswer }}</span>
