@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C c:/Users/kdrol/Desktop/Jeopardy branch --show-current)"
+    ]
+  }
+}
