@@ -1,6 +1,5 @@
 {
   "name": "jeopardy-game",
-  "homepage": "https://nathan-jones12.github.io/Code-Jeopardy",
   "private": true,
   "version": "0.0.0",
   "type": "module",
