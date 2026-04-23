@@ -19,6 +19,9 @@ const R2_VALUES = [400, 800, 1200, 1600, 2000];
 const CLUE_TIMER = 15;
 const FINAL_TIMER = 30;
 
+const TEAM_COLORS = ['#e11d48', '#2563eb', '#16a34a', '#f59e0b'];
+const TEAM_NAMES = ['Red Team', 'Blue Team', 'Green Team', 'Gold Team'];
+
 function randomCode() {
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   let out = '';
@@ -39,6 +42,10 @@ function shuffle(arr) {
   return a;
 }
 
+function variantLabel(category, variant) {
+  return (variant === 'scenarios' ? 'Scenarios: ' : 'Definitions: ') + category;
+}
+
 function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
   const byCat = {};
   for (const t of terms) {
@@ -50,21 +57,27 @@ function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
   const chosen = shuffle(eligible).slice(0, 6);
   const board = chosen.map(cat => {
     const picks = shuffle(byCat[cat]).slice(0, 5);
+    const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
     const clues = picks.map((t, i) => ({
       value: dollarValues[i],
       term: t.term,
       definition: t.definition,
+      scenario: t.scenario || t.definition,
       played: false,
       dailyDouble: false
     }));
-    return { category: cat, clues };
+    return {
+      category: cat,
+      variant,
+      label: variantLabel(cat, variant),
+      clues
+    };
   });
 
-  // Place daily doubles on random non-top-row tiles
   const ddPositions = [];
   while (ddPositions.length < dailyDoubleCount) {
     const col = Math.floor(Math.random() * 6);
-    const row = 1 + Math.floor(Math.random() * 4); // rows 1-4 (skip $200/$400 row)
+    const row = 1 + Math.floor(Math.random() * 4);
     const key = `${col}-${row}`;
     if (!ddPositions.includes(key)) {
       ddPositions.push(key);
@@ -101,14 +114,64 @@ export const useGameStore = defineStore('game', {
     board(state) {
       return state.room && state.room.board ? state.room.board : [];
     },
+    teamsMode(state) {
+      return !!(state.room && state.room.teamsMode);
+    },
+    teamCount(state) {
+      return state.room?.teamCount || 2;
+    },
+    teams(state) {
+      if (!state.room || !state.room.teams) return [];
+      return Object.entries(state.room.teams).map(([id, t]) => ({
+        id,
+        ...t,
+        memberIds: t.memberIds || []
+      }));
+    },
+    lobbyPhase(state) {
+      return state.room?.lobbyPhase || 'players';
+    },
+    myTeamId(state) {
+      if (!state.room?.teamsMode) return null;
+      const p = state.room.players?.[state.playerId];
+      return p?.teamId || null;
+    },
+    myTeam() {
+      const tid = this.myTeamId;
+      if (!tid) return null;
+      return this.teams.find(t => t.id === tid) || null;
+    },
+    isMyCaptain() {
+      const t = this.myTeam;
+      return !!t && t.captainId === this.playerId;
+    },
     currentTurnId(state) {
       return state.room ? state.room.currentTurn : null;
     },
+    currentTeamTurnId(state) {
+      return state.room?.currentTeamTurn || null;
+    },
     isMyTurn(state) {
-      return state.room && state.room.currentTurn === state.playerId;
+      if (!state.room) return false;
+      if (state.room.teamsMode) {
+        const tid = state.room.players?.[state.playerId]?.teamId;
+        const team = tid && state.room.teams ? state.room.teams[tid] : null;
+        return !!team
+          && state.room.currentTeamTurn === tid
+          && team.captainId === state.playerId;
+      }
+      return state.room.currentTurn === state.playerId;
     },
     currentTurnName(state) {
-      if (!state.room || !state.room.currentTurn || !state.room.players) return '';
+      if (!state.room) return '';
+      if (state.room.teamsMode) {
+        const tid = state.room.currentTeamTurn;
+        const team = tid && state.room.teams ? state.room.teams[tid] : null;
+        if (!team) return '';
+        const capName = team.captainId && state.room.players?.[team.captainId]?.name;
+        return `${team.name}${capName ? ' (' + capName + ')' : ''}`;
+      }
+      if (!state.room.currentTurn || !state.room.players) return '';
       const p = state.room.players[state.room.currentTurn];
       return p ? p.name : '';
     },
@@ -118,9 +181,15 @@ export const useGameStore = defineStore('game', {
     activeClue(state) {
       if (!state.room || !state.room.activeClue) return null;
       const ac = state.room.activeClue;
-      const clue = state.room.board?.[ac.col]?.clues?.[ac.row];
+      const col = state.room.board?.[ac.col];
+      const clue = col?.clues?.[ac.row];
       if (!clue) return null;
-      return { ...ac, ...clue };
+      return {
+        ...ac,
+        ...clue,
+        variant: col.variant || 'definitions',
+        categoryLabel: col.label || col.category
+      };
     },
     buzzedPlayerId(state) {
       return state.room ? state.room.buzzedPlayer : null;
@@ -181,6 +250,12 @@ export const useGameStore = defineStore('game', {
         lastResult: null,
         r1Categories: null,
         final: null,
+        teamsMode: false,
+        teamCount: 2,
+        teams: null,
+        teamOrder: null,
+        currentTeamTurn: null,
+        lobbyPhase: 'players',
         createdAt: serverTimestamp()
       };
       await set(dbRef(db, `rooms/${code}`), initial);
@@ -215,45 +290,142 @@ export const useGameStore = defineStore('game', {
       onDisconnect(playerRef).remove();
     },
 
+    // ─── TEAMS MODE (lobby) ────────────────────────
+    async setTeamsMode(on) {
+      if (!this.isHost) return;
+      const updates = {
+        teamsMode: !!on,
+        lobbyPhase: 'players',
+        teams: null,
+        teamOrder: null,
+        currentTeamTurn: null
+      };
+      await update(dbRef(db, `rooms/${this.roomCode}`), updates);
+    },
+
+    async setTeamCount(n) {
+      if (!this.isHost) return;
+      const count = Math.max(2, Math.min(4, n | 0));
+      await update(dbRef(db, `rooms/${this.roomCode}`), {
+        teamCount: count,
+        teams: null,
+        lobbyPhase: 'players'
+      });
+    },
+
+    async autoBalanceTeams() {
+      if (!this.isHost) return;
+      const count = this.teamCount;
+      const playerIds = shuffle(Object.keys(this.room.players || {}));
+      if (playerIds.length < count) return;
+      const teams = {};
+      for (let i = 0; i < count; i++) {
+        const tid = `t${i + 1}`;
+        teams[tid] = {
+          name: TEAM_NAMES[i],
+          color: TEAM_COLORS[i],
+          score: 0,
+          captainId: null,
+          memberIds: []
+        };
+      }
+      const teamIds = Object.keys(teams);
+      playerIds.forEach((pid, idx) => {
+        const tid = teamIds[idx % count];
+        teams[tid].memberIds.push(pid);
+      });
+      await update(dbRef(db, `rooms/${this.roomCode}`), {
+        teams,
+        lobbyPhase: 'balanced'
+      });
+    },
+
+    async setCaptain(teamId, playerId) {
+      if (!this.isHost) return;
+      const teams = this.room?.teams || {};
+      const team = teams[teamId];
+      if (!team) return;
+      if (!(team.memberIds || []).includes(playerId)) return;
+      await update(
+        dbRef(db, `rooms/${this.roomCode}/teams/${teamId}`),
+        { captainId: playerId }
+      );
+      // Check if all teams now have a captain
+      const snap = await get(dbRef(db, `rooms/${this.roomCode}/teams`));
+      const fresh = snap.val() || {};
+      const allSet = Object.values(fresh).every(t => !!t.captainId);
+      if (allSet) {
+        await update(dbRef(db, `rooms/${this.roomCode}`), {
+          lobbyPhase: 'captains-chosen'
+        });
+      } else {
+        await update(dbRef(db, `rooms/${this.roomCode}`), {
+          lobbyPhase: 'balanced'
+        });
+      }
+    },
+
     // ─── ROUND START ───────────────────────────────
     async startGame() {
       if (!this.isHost) return;
-      const playerIds = Object.keys(this.room.players);
-      const order = shuffle(playerIds);
       const board = buildBoard([], R1_VALUES, 1);
       const r1Cats = board.map(c => c.category);
-
-      await update(dbRef(db, `rooms/${this.roomCode}`), {
+      const updates = {
         board,
         status: 'playing',
         round: 1,
-        turnOrder: order,
-        currentTurn: order[0],
         activeClue: null,
         buzzedPlayer: null,
         failedPlayers: null,
         lastResult: null,
         r1Categories: r1Cats,
         final: null
-      });
+      };
+
+      if (this.room?.teamsMode) {
+        if (this.lobbyPhase !== 'captains-chosen') return;
+        const teams = this.room.teams || {};
+        const teamIds = shuffle(Object.keys(teams));
+        updates.teamOrder = teamIds;
+        updates.currentTeamTurn = teamIds[0];
+        updates.turnOrder = null;
+        updates.currentTurn = null;
+        // Stamp teamId on each player
+        for (const [tid, t] of Object.entries(teams)) {
+          for (const pid of (t.memberIds || [])) {
+            updates[`players/${pid}/teamId`] = tid;
+            updates[`players/${pid}/score`] = 0;
+          }
+        }
+      } else {
+        const playerIds = Object.keys(this.room.players);
+        const order = shuffle(playerIds);
+        updates.turnOrder = order;
+        updates.currentTurn = order[0];
+      }
+
+      await update(dbRef(db, `rooms/${this.roomCode}`), updates);
     },
 
     async startDoubleJeopardy() {
       const board = buildBoard(this.r1Categories, R2_VALUES, 2);
-      const order = this.turnOrder;
-      // Player with lowest score picks first in Double Jeopardy
-      const sorted = this.players.slice().sort((a, b) => a.score - b.score);
-      const firstTurn = sorted[0]?.id || order[0];
-
-      await update(dbRef(db, `rooms/${this.roomCode}`), {
+      const updates = {
         board,
         round: 2,
-        currentTurn: firstTurn,
         activeClue: null,
         buzzedPlayer: null,
         failedPlayers: null,
         lastResult: null
-      });
+      };
+      if (this.room?.teamsMode) {
+        const sortedTeams = this.teams.slice().sort((a, b) => (a.score || 0) - (b.score || 0));
+        updates.currentTeamTurn = sortedTeams[0]?.id || this.teams[0]?.id;
+      } else {
+        const sorted = this.players.slice().sort((a, b) => a.score - b.score);
+        updates.currentTurn = sorted[0]?.id || this.turnOrder[0];
+      }
+
+      await update(dbRef(db, `rooms/${this.roomCode}`), updates);
     },
 
     async startFinalJeopardy() {
@@ -271,6 +443,7 @@ export const useGameStore = defineStore('game', {
         ? shuffle(available)[0]
         : shuffle(Object.keys(byCat))[0];
       const clue = shuffle(byCat[cat])[0];
+      const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
 
       await update(dbRef(db, `rooms/${this.roomCode}`), {
         round: 3,
@@ -278,12 +451,17 @@ export const useGameStore = defineStore('game', {
         activeClue: null,
         final: {
           category: cat,
+          categoryLabel: variantLabel(cat, variant),
+          variant,
           term: clue.term,
           definition: clue.definition,
+          scenario: clue.scenario || clue.definition,
           phase: 'category',
           phaseStartedAt: Date.now(),
           wagers: {},
           answers: {},
+          teamWagers: {},
+          teamAnswers: {},
           results: null
         }
       });
@@ -322,6 +500,23 @@ export const useGameStore = defineStore('game', {
       });
     },
 
+    _scoreDeltaUpdates(playerId, delta) {
+      // Returns {[path]: newValue} flat updates for a score change.
+      const updates = {};
+      if (this.room?.teamsMode) {
+        const p = this.room.players?.[playerId];
+        const tid = p?.teamId;
+        if (tid) {
+          const current = this.room.teams?.[tid]?.score || 0;
+          updates[`teams/${tid}/score`] = current + delta;
+        }
+      } else {
+        const current = this.room?.players?.[playerId]?.score || 0;
+        updates[`players/${playerId}/score`] = current + delta;
+      }
+      return updates;
+    },
+
     async submitDailyDoubleAnswer(text) {
       if (!this.isMyTurn) return;
       const ac = this.activeClue;
@@ -329,24 +524,24 @@ export const useGameStore = defineStore('game', {
       const correct = checkAnswer(text, ac.term);
       const wager = ac.wager || 0;
       const delta = correct ? wager : -wager;
-      const currentScore = this.room?.players?.[this.playerId]?.score || 0;
       const { col, row } = ac;
 
-      const updates = {};
-      updates[`board/${col}/clues/${row}/played`] = true;
-      updates[`players/${this.playerId}/score`] = currentScore + delta;
-      updates['activeClue'] = null;
-      updates['buzzedPlayer'] = null;
-      updates['failedPlayers'] = null;
-      updates['lastResult'] = {
-        playerId: this.playerId,
-        playerName: this.playerName,
-        correct,
-        answer: text,
-        correctAnswer: ac.term,
-        value: wager,
-        dailyDouble: true,
-        at: Date.now()
+      const updates = {
+        [`board/${col}/clues/${row}/played`]: true,
+        ...this._scoreDeltaUpdates(this.playerId, delta),
+        activeClue: null,
+        buzzedPlayer: null,
+        failedPlayers: null,
+        lastResult: {
+          playerId: this.playerId,
+          playerName: this.playerName,
+          correct,
+          answer: text,
+          correctAnswer: ac.term,
+          value: wager,
+          dailyDouble: true,
+          at: Date.now()
+        }
       };
 
       await update(dbRef(db, `rooms/${this.roomCode}`), updates);
@@ -357,12 +552,11 @@ export const useGameStore = defineStore('game', {
     async buzzIn() {
       if (!this.activeClue) return;
       if (this.activeClue.phase !== 'open') return;
-      // can't buzz if already failed on this clue
       if (this.failedPlayers.includes(this.playerId)) return;
       const buzzRef = dbRef(db, `rooms/${this.roomCode}/buzzedPlayer`);
       await runTransaction(buzzRef, current => {
         if (current == null) return this.playerId;
-        return; // abort — someone else won
+        return;
       });
     },
 
@@ -374,44 +568,49 @@ export const useGameStore = defineStore('game', {
 
       const correct = checkAnswer(text, ac.term);
       const value = ac.value;
-      const currentScore = this.room?.players?.[this.playerId]?.score || 0;
       const { col, row } = ac;
 
       if (correct) {
-        const updates = {};
-        updates[`board/${col}/clues/${row}/played`] = true;
-        updates['activeClue'] = null;
-        updates['buzzedPlayer'] = null;
-        updates['failedPlayers'] = null;
-        updates['currentTurn'] = this.playerId;
-        updates[`players/${this.playerId}/score`] = currentScore + value;
-        updates['lastResult'] = {
-          playerId: this.playerId,
-          playerName: this.playerName,
-          correct: true,
-          answer: text,
-          correctAnswer: ac.term,
-          value,
-          dailyDouble: false,
-          at: Date.now()
+        const updates = {
+          [`board/${col}/clues/${row}/played`]: true,
+          activeClue: null,
+          buzzedPlayer: null,
+          failedPlayers: null,
+          ...this._scoreDeltaUpdates(this.playerId, value),
+          lastResult: {
+            playerId: this.playerId,
+            playerName: this.playerName,
+            correct: true,
+            answer: text,
+            correctAnswer: ac.term,
+            value,
+            dailyDouble: false,
+            at: Date.now()
+          }
         };
+        if (this.room?.teamsMode) {
+          const winningTeam = this.room.players?.[this.playerId]?.teamId;
+          if (winningTeam) updates.currentTeamTurn = winningTeam;
+        } else {
+          updates.currentTurn = this.playerId;
+        }
         await update(dbRef(db, `rooms/${this.roomCode}`), updates);
         this._checkBoardComplete(col, row);
       } else {
-        // Wrong: deduct, add to failed, clear buzz so others can try
-        const updates = {};
-        updates['buzzedPlayer'] = null;
-        updates[`players/${this.playerId}/score`] = currentScore - value;
-        updates[`failedPlayers/${this.playerId}`] = true;
-        updates['lastResult'] = {
-          playerId: this.playerId,
-          playerName: this.playerName,
-          correct: false,
-          answer: text,
-          correctAnswer: ac.term,
-          value,
-          dailyDouble: false,
-          at: Date.now()
+        const updates = {
+          buzzedPlayer: null,
+          ...this._scoreDeltaUpdates(this.playerId, -value),
+          [`failedPlayers/${this.playerId}`]: true,
+          lastResult: {
+            playerId: this.playerId,
+            playerName: this.playerName,
+            correct: false,
+            answer: text,
+            correctAnswer: ac.term,
+            value,
+            dailyDouble: false,
+            at: Date.now()
+          }
         };
         await update(dbRef(db, `rooms/${this.roomCode}`), updates);
       }
@@ -470,41 +669,68 @@ export const useGameStore = defineStore('game', {
     },
 
     async submitFinalWager(amount) {
-      await update(
-        dbRef(db, `rooms/${this.roomCode}/final/wagers/${this.playerId}`),
-        {}
-      );
-      await set(
-        dbRef(db, `rooms/${this.roomCode}/final/wagers/${this.playerId}`),
-        amount
-      );
+      if (this.room?.teamsMode) {
+        const tid = this.myTeamId;
+        if (!tid || !this.isMyCaptain) return;
+        await set(
+          dbRef(db, `rooms/${this.roomCode}/final/teamWagers/${tid}`),
+          amount
+        );
+      } else {
+        await set(
+          dbRef(db, `rooms/${this.roomCode}/final/wagers/${this.playerId}`),
+          amount
+        );
+      }
     },
 
     async submitFinalAnswer(text) {
-      await set(
-        dbRef(db, `rooms/${this.roomCode}/final/answers/${this.playerId}`),
-        text
-      );
+      if (this.room?.teamsMode) {
+        const tid = this.myTeamId;
+        if (!tid || !this.isMyCaptain) return;
+        await set(
+          dbRef(db, `rooms/${this.roomCode}/final/teamAnswers/${tid}`),
+          text
+        );
+      } else {
+        await set(
+          dbRef(db, `rooms/${this.roomCode}/final/answers/${this.playerId}`),
+          text
+        );
+      }
     },
 
     async revealFinalResults() {
       const final = this.finalState;
       if (!final) return;
       const results = {};
+      const teamResults = {};
       const scoreUpdates = {};
 
-      for (const p of this.players) {
-        const wager = final.wagers?.[p.id] ?? 0;
-        const answer = final.answers?.[p.id] ?? '';
-        const correct = answer ? checkAnswer(answer, final.term) : false;
-        const delta = correct ? wager : -wager;
-        results[p.id] = { correct, wager, answer, delta };
-        scoreUpdates[`players/${p.id}/score`] = (p.score || 0) + delta;
+      if (this.room?.teamsMode) {
+        for (const t of this.teams) {
+          const wager = final.teamWagers?.[t.id] ?? 0;
+          const answer = final.teamAnswers?.[t.id] ?? '';
+          const correct = answer ? checkAnswer(answer, final.term) : false;
+          const delta = correct ? wager : -wager;
+          teamResults[t.id] = { correct, wager, answer, delta };
+          scoreUpdates[`teams/${t.id}/score`] = (t.score || 0) + delta;
+        }
+      } else {
+        for (const p of this.players) {
+          const wager = final.wagers?.[p.id] ?? 0;
+          const answer = final.answers?.[p.id] ?? '';
+          const correct = answer ? checkAnswer(answer, final.term) : false;
+          const delta = correct ? wager : -wager;
+          results[p.id] = { correct, wager, answer, delta };
+          scoreUpdates[`players/${p.id}/score`] = (p.score || 0) + delta;
+        }
       }
 
       const updates = {
         ...scoreUpdates,
         'final/results': results,
+        'final/teamResults': teamResults,
         'final/phase': 'reveal',
         status: 'finished'
       };
@@ -516,9 +742,12 @@ export const useGameStore = defineStore('game', {
       if (!this.isHost) return;
       const resetPlayers = {};
       for (const p of this.players) {
-        resetPlayers[p.id] = { name: p.name, score: 0 };
+        const reset = { name: p.name, score: 0 };
+        if (this.room?.teamsMode && p.teamId) reset.teamId = p.teamId;
+        resetPlayers[p.id] = reset;
       }
-      await update(dbRef(db, `rooms/${this.roomCode}`), {
+
+      const updates = {
         board: null,
         status: 'lobby',
         round: 0,
@@ -531,7 +760,19 @@ export const useGameStore = defineStore('game', {
         r1Categories: null,
         final: null,
         players: resetPlayers
-      });
+      };
+
+      if (this.room?.teamsMode && this.room.teams) {
+        const teams = {};
+        for (const [tid, t] of Object.entries(this.room.teams)) {
+          teams[tid] = { ...t, score: 0 };
+        }
+        updates.teams = teams;
+        updates.currentTeamTurn = null;
+        updates.teamOrder = null;
+      }
+
+      await update(dbRef(db, `rooms/${this.roomCode}`), updates);
     },
 
     async leaveRoom() {

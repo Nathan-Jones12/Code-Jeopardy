@@ -26,7 +26,15 @@ const buzzedName = computed(() => {
 
 const categoryName = computed(() => {
   if (!clue.value) return '';
-  return store.board[clue.value.col]?.category || '';
+  const col = store.board[clue.value.col];
+  return col?.label || col?.category || '';
+});
+
+const promptText = computed(() => {
+  if (!clue.value) return '';
+  return clue.value.variant === 'scenarios'
+    ? (clue.value.scenario || clue.value.definition)
+    : clue.value.definition;
 });
 
 const clueValue = computed(() => {
@@ -40,6 +48,9 @@ const isMyTurn = computed(() => store.isMyTurn);
 // Daily Double wager
 const wager = ref(200);
 const myScore = computed(() => {
+  if (store.teamsMode) {
+    return store.myTeam?.score || 0;
+  }
   const p = store.room?.players?.[store.playerId];
   return p ? p.score : 0;
 });
@@ -168,7 +179,7 @@ function submitDDAnswer() {
           <div class="timer-fill" :style="{ width: (secondsLeft / 15 * 100) + '%' }"></div>
           <span class="timer-text">{{ secondsLeft }}s</span>
         </div>
-        <div class="clue-text">{{ clue.definition }}</div>
+        <div class="clue-text">{{ promptText }}</div>
         <div v-if="isMyTurn" class="answer-row">
           <input
             v-model="answer"
@@ -195,7 +206,7 @@ function submitDDAnswer() {
           ></div>
           <span class="timer-text">{{ secondsLeft }}s</span>
         </div>
-        <div class="clue-text">{{ clue.definition }}</div>
+        <div class="clue-text">{{ promptText }}</div>
 
         <div class="interact">
           <!-- Nobody buzzed yet -->

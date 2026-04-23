@@ -13,12 +13,35 @@ const answerLocked = ref(false);
 
 let timerInterval = null;
 
+const teamsMode = computed(() => store.teamsMode);
+const myTeam = computed(() => store.myTeam);
+const isMyCaptain = computed(() => store.isMyCaptain);
+
 const myScore = computed(() => {
+  if (teamsMode.value) {
+    return myTeam.value ? Math.max(0, myTeam.value.score || 0) : 0;
+  }
   const p = store.room?.players?.[store.playerId];
   return p ? Math.max(0, p.score) : 0;
 });
 
-const canPlay = computed(() => myScore.value > 0);
+const canPlay = computed(() => {
+  if (myScore.value <= 0) return false;
+  if (teamsMode.value) return isMyCaptain.value;
+  return true;
+});
+
+const promptText = computed(() => {
+  if (!final.value) return '';
+  return final.value.variant === 'scenarios'
+    ? (final.value.scenario || final.value.definition)
+    : final.value.definition;
+});
+
+const categoryLabel = computed(() => {
+  if (!final.value) return '';
+  return final.value.categoryLabel || final.value.category;
+});
 
 function startTimer(seconds) {
   stopTimer();
@@ -40,13 +63,12 @@ function stopTimer() {
 }
 
 function handleTimerEnd() {
-  if (phase.value === 'wager' && !wagerLocked.value) {
+  if (phase.value === 'wager' && !wagerLocked.value && canPlay.value) {
     submitWager();
   }
-  if (phase.value === 'answer' && !answerLocked.value) {
+  if (phase.value === 'answer' && !answerLocked.value && canPlay.value) {
     submitAnswer();
   }
-  // Host auto-advances after timer
   if (store.isHost) {
     if (phase.value === 'wager') {
       setTimeout(() => store.advanceFinalPhase('answer'), 2000);
@@ -62,7 +84,6 @@ watch(phase, (p) => {
     answerLocked.value = false;
     wager.value = 0;
     answer.value = '';
-    // Auto-advance to wager after 4 seconds (host does it)
     if (store.isHost) {
       setTimeout(() => {
         if (store.finalState?.phase === 'category') {
@@ -95,12 +116,30 @@ function submitAnswer() {
 }
 
 const results = computed(() => {
-  if (!final.value?.results) return [];
+  if (!final.value?.results && !final.value?.teamResults) return [];
+  if (teamsMode.value) {
+    const tr = final.value.teamResults || {};
+    return store.teams.map(t => ({
+      id: t.id,
+      name: t.name,
+      color: t.color,
+      finalScore: t.score || 0,
+      ...(tr[t.id] || {})
+    })).sort((a, b) => b.finalScore - a.finalScore);
+  }
   return store.players.map(p => ({
     ...p,
-    ...final.value.results[p.id],
+    ...(final.value.results?.[p.id] || {}),
     finalScore: p.score
   })).sort((a, b) => b.finalScore - a.finalScore);
+});
+
+const waitingMsg = computed(() => {
+  if (!teamsMode.value) return '';
+  if (!myTeam.value) return 'No team assignment';
+  if (isMyCaptain.value) return '';
+  const capName = store.room?.players?.[myTeam.value.captainId]?.name || 'captain';
+  return `Your captain (${capName}) is answering for ${myTeam.value.name}.`;
 });
 </script>
 
@@ -111,7 +150,7 @@ const results = computed(() => {
       <div class="splash">
         <h1>FINAL JEOPARDY!</h1>
         <h2>The category is…</h2>
-        <div class="final-cat">{{ final.category }}</div>
+        <div class="final-cat">{{ categoryLabel }}</div>
       </div>
     </template>
 
@@ -119,7 +158,7 @@ const results = computed(() => {
     <template v-else-if="phase === 'wager'">
       <div class="panel">
         <h2>FINAL JEOPARDY</h2>
-        <div class="final-cat">{{ final.category }}</div>
+        <div class="final-cat">{{ categoryLabel }}</div>
         <div class="timer-bar">
           <div class="timer-fill" :class="{ danger: secondsLeft <= 10 }"
                :style="{ width: (secondsLeft / 30 * 100) + '%' }"></div>
@@ -127,7 +166,8 @@ const results = computed(() => {
         </div>
 
         <div v-if="canPlay && !wagerLocked" class="wager-panel">
-          <p>Your score: <strong>${{ myScore }}</strong></p>
+          <p v-if="teamsMode">Team: <strong :style="{ color: myTeam?.color }">{{ myTeam?.name }}</strong></p>
+          <p>{{ teamsMode ? 'Team score' : 'Your score' }}: <strong>${{ myScore }}</strong></p>
           <p>Wager up to your full score:</p>
           <div class="wager-row">
             <input
@@ -141,6 +181,7 @@ const results = computed(() => {
           </div>
         </div>
         <p v-else-if="wagerLocked" class="locked">Wager locked! Waiting for others…</p>
+        <p v-else-if="teamsMode && !isMyCaptain" class="locked">{{ waitingMsg }}</p>
         <p v-else class="locked">You have $0 or less — you cannot wager in Final Jeopardy.</p>
       </div>
     </template>
@@ -148,13 +189,13 @@ const results = computed(() => {
     <!-- ANSWER PHASE -->
     <template v-else-if="phase === 'answer'">
       <div class="panel">
-        <h2>FINAL JEOPARDY — {{ final.category }}</h2>
+        <h2>FINAL JEOPARDY — {{ categoryLabel }}</h2>
         <div class="timer-bar">
           <div class="timer-fill" :class="{ danger: secondsLeft <= 10 }"
                :style="{ width: (secondsLeft / 30 * 100) + '%' }"></div>
           <span class="timer-text">{{ secondsLeft }}s</span>
         </div>
-        <div class="clue-text">{{ final.definition }}</div>
+        <div class="clue-text">{{ promptText }}</div>
 
         <div v-if="canPlay && !answerLocked" class="answer-row">
           <input
@@ -166,6 +207,7 @@ const results = computed(() => {
           <button class="gold-btn" @click="submitAnswer">Lock Answer</button>
         </div>
         <p v-else-if="answerLocked" class="locked">Answer locked! Waiting for others…</p>
+        <p v-else-if="teamsMode && !isMyCaptain" class="locked">{{ waitingMsg }}</p>
         <p v-else class="locked">You are not participating in Final Jeopardy.</p>
       </div>
     </template>
@@ -182,10 +224,10 @@ const results = computed(() => {
             :class="{ winner: i === 0, correct: r.correct, wrong: !r.correct }"
           >
             <span class="rank">{{ i + 1 }}.</span>
-            <span class="name">{{ r.name }}</span>
+            <span class="name" :style="teamsMode ? { color: r.color } : null">{{ r.name }}</span>
             <span class="r-answer">{{ r.answer || '(no answer)' }}</span>
             <span class="r-verdict">{{ r.correct ? 'Correct' : 'Wrong' }}</span>
-            <span class="r-delta">{{ r.correct ? '+' : '' }}{{ r.delta >= 0 ? '+' : '' }}${{ Math.abs(r.delta || 0) }}</span>
+            <span class="r-delta">{{ r.delta >= 0 ? '+' : '-' }}${{ Math.abs(r.delta || 0) }}</span>
             <span class="r-final">${{ r.finalScore }}</span>
           </div>
         </div>
@@ -204,10 +246,7 @@ const results = computed(() => {
   padding: 2rem;
 }
 
-.splash {
-  text-align: center;
-  animation: fadein 0.5s ease;
-}
+.splash { text-align: center; animation: fadein 0.5s ease; }
 
 .splash h1 {
   font-family: var(--serif);
@@ -295,10 +334,7 @@ const results = computed(() => {
   text-shadow: 2px 2px 0 #000;
 }
 
-.wager-panel p {
-  color: #fff;
-  margin: 0.3rem 0;
-}
+.wager-panel p { color: #fff; margin: 0.3rem 0; }
 
 .wager-row {
   display: flex;
@@ -357,10 +393,7 @@ const results = computed(() => {
   margin: 1rem 0;
 }
 
-/* Results */
-.results-list {
-  margin: 1rem 0;
-}
+.results-list { margin: 1rem 0; }
 
 .result-row {
   display: grid;

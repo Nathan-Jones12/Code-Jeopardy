@@ -103,6 +103,9 @@ function onPick({ col, row }) {
       :self-id="store.playerId"
       :buzzed-id="store.buzzedPlayerId"
       :current-turn-id="store.currentTurnId"
+      :teams-mode="store.teamsMode"
+      :teams="store.teams"
+      :current-team-id="store.currentTeamTurnId"
     />
 
     <ClueModal v-if="store.activeClue" />

@@ -25,21 +25,45 @@ watch(
   }
 );
 
-const ranked = computed(() =>
-  store.players.slice().sort((a, b) => b.score - a.score)
-);
+const teamsMode = computed(() => store.teamsMode);
+
+const ranked = computed(() => {
+  if (teamsMode.value) {
+    return store.teams.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+  return store.players.slice().sort((a, b) => b.score - a.score);
+});
 
 const winner = computed(() => ranked.value[0]);
 
 // Final Jeopardy results (if we came from final)
 const finalResults = computed(() => {
   const f = store.finalState;
-  if (!f || !f.results) return null;
+  if (!f) return null;
+  if (teamsMode.value) {
+    if (!f.teamResults) return null;
+    return store.teams.map(t => ({
+      id: t.id,
+      name: t.name,
+      color: t.color,
+      score: t.score || 0,
+      ...(f.teamResults[t.id] || {})
+    })).sort((a, b) => b.score - a.score);
+  }
+  if (!f.results) return null;
   return store.players.map(p => ({
     ...p,
     ...f.results[p.id]
   })).sort((a, b) => b.score - a.score);
 });
+
+function memberNames(teamId) {
+  const t = store.teams.find(tt => tt.id === teamId);
+  if (!t) return '';
+  return (t.memberIds || [])
+    .map(id => store.players.find(p => p.id === id)?.name || '?')
+    .join(', ');
+}
 
 function newGame() {
   store.newGame();
@@ -68,8 +92,9 @@ function leave() {
           :class="{ winner: i === 0 }"
         >
           <span class="rank">{{ i + 1 }}.</span>
-          <span class="name">{{ p.name }}</span>
-          <span class="score">${{ p.score }}</span>
+          <span class="name" :style="teamsMode ? { color: p.color } : null">{{ p.name }}</span>
+          <span v-if="teamsMode" class="members">{{ memberNames(p.id) }}</span>
+          <span class="score">${{ p.score || 0 }}</span>
         </li>
       </ol>
     </div>
@@ -148,6 +173,14 @@ function leave() {
   list-style: none;
   padding: 0;
   margin: 0;
+}
+
+.members {
+  font-size: 0.8rem;
+  color: #93a6d1;
+  font-style: italic;
+  grid-column: 2 / 3;
+  font-weight: normal;
 }
 
 .scores li {

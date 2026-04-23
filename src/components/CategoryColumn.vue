@@ -12,7 +12,7 @@ const emit = defineEmits(['tile']);
 
 <template>
   <div class="col">
-    <div class="header">{{ column.category }}</div>
+    <div class="header">{{ column.label || column.category }}</div>
     <ClueTile
       v-for="(clue, ri) in column.clues"
       :key="ri"
