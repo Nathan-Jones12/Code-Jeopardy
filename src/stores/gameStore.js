@@ -13,6 +13,12 @@ import {
 import { db } from '../firebase.js';
 import { terms } from '../data/terms.js';
 import { checkAnswer } from '../utils/answerChecker.js';
+import {
+  generateCluesBatch,
+  judgeAnswer,
+  geminiEnabled,
+  GeminiUnavailableError
+} from '../utils/gemini.js';
 
 const R1_VALUES = [200, 400, 600, 800, 1000];
 const R2_VALUES = [400, 800, 1200, 1600, 2000];
@@ -46,7 +52,60 @@ function variantLabel(category, variant) {
   return (variant === 'scenarios' ? 'Scenarios: ' : 'Definitions: ') + category;
 }
 
-function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
+async function fetchCachedClues(termIds) {
+  const out = {};
+  await Promise.all(termIds.map(async id => {
+    try {
+      const snap = await get(dbRef(db, `cluesCache/${id}`));
+      if (snap.exists()) out[id] = snap.val();
+    } catch { /* ignore */ }
+  }));
+  return out;
+}
+
+async function writeCachedClues(map) {
+  const updates = {};
+  for (const [id, v] of Object.entries(map)) {
+    updates[`cluesCache/${id}/definition`] = v.definition;
+    updates[`cluesCache/${id}/scenario`] = v.scenario;
+    updates[`cluesCache/${id}/generatedAt`] = Date.now();
+  }
+  if (Object.keys(updates).length) {
+    try { await update(dbRef(db), updates); } catch { /* ignore */ }
+  }
+}
+
+async function resolveClueContent(pickedTerms) {
+  // pickedTerms: array of term objects. Returns map id -> { definition, scenario }.
+  const ids = pickedTerms.map(t => t.id);
+  const cached = await fetchCachedClues(ids);
+  const missing = pickedTerms.filter(t => !cached[t.id]);
+
+  let generated = {};
+  if (missing.length && geminiEnabled()) {
+    try {
+      generated = await generateCluesBatch(
+        missing.map(t => ({ id: t.id, term: t.term, category: t.category }))
+      );
+      if (Object.keys(generated).length) await writeCachedClues(generated);
+    } catch (e) {
+      // Swallow — fall back to static content
+      generated = {};
+    }
+  }
+
+  const result = {};
+  for (const t of pickedTerms) {
+    const c = cached[t.id] || generated[t.id];
+    result[t.id] = {
+      definition: c?.definition || t.definition,
+      scenario: c?.scenario || t.scenario || t.definition
+    };
+  }
+  return result;
+}
+
+async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
   const byCat = {};
   for (const t of terms) {
     if (!byCat[t.category]) byCat[t.category] = [];
@@ -55,17 +114,24 @@ function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
   const eligible = Object.keys(byCat)
     .filter(c => byCat[c].length >= 5 && !excludeCategories.includes(c));
   const chosen = shuffle(eligible).slice(0, 6);
-  const board = chosen.map(cat => {
-    const picks = shuffle(byCat[cat]).slice(0, 5);
+
+  const picksPerCat = chosen.map(cat => shuffle(byCat[cat]).slice(0, 5));
+  const allPicks = picksPerCat.flat();
+  const content = await resolveClueContent(allPicks);
+
+  const board = chosen.map((cat, ci) => {
     const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
-    const clues = picks.map((t, i) => ({
-      value: dollarValues[i],
-      term: t.term,
-      definition: t.definition,
-      scenario: t.scenario || t.definition,
-      played: false,
-      dailyDouble: false
-    }));
+    const clues = picksPerCat[ci].map((t, i) => {
+      const c = content[t.id];
+      return {
+        value: dollarValues[i],
+        term: t.term,
+        definition: c.definition,
+        scenario: c.scenario,
+        played: false,
+        dailyDouble: false
+      };
+    });
     return {
       category: cat,
       variant,
@@ -94,7 +160,8 @@ export const useGameStore = defineStore('game', {
     playerName: localStorage.getItem('jeop_playerName') || '',
     roomCode: '',
     room: null,
-    unsubscribe: null
+    unsubscribe: null,
+    isChecking: false
   }),
 
   getters: {
@@ -368,7 +435,7 @@ export const useGameStore = defineStore('game', {
     // ─── ROUND START ───────────────────────────────
     async startGame() {
       if (!this.isHost) return;
-      const board = buildBoard([], R1_VALUES, 1);
+      const board = await buildBoard([], R1_VALUES, 1);
       const r1Cats = board.map(c => c.category);
       const updates = {
         board,
@@ -408,7 +475,7 @@ export const useGameStore = defineStore('game', {
     },
 
     async startDoubleJeopardy() {
-      const board = buildBoard(this.r1Categories, R2_VALUES, 2);
+      const board = await buildBoard(this.r1Categories, R2_VALUES, 2);
       const updates = {
         board,
         round: 2,
@@ -444,6 +511,8 @@ export const useGameStore = defineStore('game', {
         : shuffle(Object.keys(byCat))[0];
       const clue = shuffle(byCat[cat])[0];
       const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
+      const resolved = await resolveClueContent([clue]);
+      const content = resolved[clue.id];
 
       await update(dbRef(db, `rooms/${this.roomCode}`), {
         round: 3,
@@ -454,8 +523,8 @@ export const useGameStore = defineStore('game', {
           categoryLabel: variantLabel(cat, variant),
           variant,
           term: clue.term,
-          definition: clue.definition,
-          scenario: clue.scenario || clue.definition,
+          definition: content.definition,
+          scenario: content.scenario,
           phase: 'category',
           phaseStartedAt: Date.now(),
           wagers: {},
@@ -500,6 +569,26 @@ export const useGameStore = defineStore('game', {
       });
     },
 
+    async _adjudicate(submitted, ac) {
+      // Returns true if the submitted answer should be treated as correct.
+      // Fast-path with local checker; fall back to Gemini for near-misses.
+      if (!submitted) return false;
+      if (checkAnswer(submitted, ac.term)) return true;
+      if (submitted.trim().length < 3) return false;
+      if (!geminiEnabled()) return false;
+      const clueText = (ac.variant === 'scenarios')
+        ? (ac.scenario || ac.definition)
+        : ac.definition;
+      this.isChecking = true;
+      try {
+        return await judgeAnswer({ submitted, term: ac.term, clueText });
+      } catch (e) {
+        return false;
+      } finally {
+        this.isChecking = false;
+      }
+    },
+
     _scoreDeltaUpdates(playerId, delta) {
       // Returns {[path]: newValue} flat updates for a score change.
       const updates = {};
@@ -521,7 +610,7 @@ export const useGameStore = defineStore('game', {
       if (!this.isMyTurn) return;
       const ac = this.activeClue;
       if (!ac) return;
-      const correct = checkAnswer(text, ac.term);
+      const correct = await this._adjudicate(text, ac);
       const wager = ac.wager || 0;
       const delta = correct ? wager : -wager;
       const { col, row } = ac;
@@ -566,7 +655,7 @@ export const useGameStore = defineStore('game', {
       if (!ac) return;
       if (this.buzzedPlayerId !== this.playerId) return;
 
-      const correct = checkAnswer(text, ac.term);
+      const correct = await this._adjudicate(text, ac);
       const value = ac.value;
       const { col, row } = ac;
 
@@ -707,11 +796,18 @@ export const useGameStore = defineStore('game', {
       const teamResults = {};
       const scoreUpdates = {};
 
+      const finalAc = {
+        term: final.term,
+        variant: final.variant,
+        definition: final.definition,
+        scenario: final.scenario
+      };
+
       if (this.room?.teamsMode) {
         for (const t of this.teams) {
           const wager = final.teamWagers?.[t.id] ?? 0;
           const answer = final.teamAnswers?.[t.id] ?? '';
-          const correct = answer ? checkAnswer(answer, final.term) : false;
+          const correct = answer ? await this._adjudicate(answer, finalAc) : false;
           const delta = correct ? wager : -wager;
           teamResults[t.id] = { correct, wager, answer, delta };
           scoreUpdates[`teams/${t.id}/score`] = (t.score || 0) + delta;
@@ -720,7 +816,7 @@ export const useGameStore = defineStore('game', {
         for (const p of this.players) {
           const wager = final.wagers?.[p.id] ?? 0;
           const answer = final.answers?.[p.id] ?? '';
-          const correct = answer ? checkAnswer(answer, final.term) : false;
+          const correct = answer ? await this._adjudicate(answer, finalAc) : false;
           const delta = correct ? wager : -wager;
           results[p.id] = { correct, wager, answer, delta };
           scoreUpdates[`players/${p.id}/score`] = (p.score || 0) + delta;

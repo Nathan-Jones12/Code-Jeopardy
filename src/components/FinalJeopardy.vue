@@ -206,6 +206,7 @@ const waitingMsg = computed(() => {
           />
           <button class="gold-btn" @click="submitAnswer">Lock Answer</button>
         </div>
+        <p v-else-if="answerLocked && store.isChecking" class="locked">Judging answers…</p>
         <p v-else-if="answerLocked" class="locked">Answer locked! Waiting for others…</p>
         <p v-else-if="teamsMode && !isMyCaptain" class="locked">{{ waitingMsg }}</p>
         <p v-else class="locked">You are not participating in Final Jeopardy.</p>

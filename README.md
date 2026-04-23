@@ -18,6 +18,19 @@ Built with:
 
 ---
 
+## Gemini API (optional, for smart clues + answer checking)
+
+Set `VITE_GEMINI_API_KEY` in a local `.env` (copy from `.env.example`) to enable:
+
+- Tighter, unambiguous scenario/definition clues generated per term and cached in Firebase (`cluesCache/<termId>`).
+- Smart synonym checking: if the local checker marks an answer wrong, Gemini adjudicates whether it's an acceptable alternate phrasing before penalizing.
+
+Without a key, the game falls back to the static clues in `src/data/terms.js` and the local fuzzy checker — everything still works.
+
+For CI/deploy, put the key in the repo secret `GEMINI_API_KEY`; the GitHub Actions workflow injects it at build time. Restrict the key in Google Cloud Console (HTTP referrer → your Pages URL; daily quota cap) since Vite bundles the value into the client JS.
+
+---
+
 ## 1 — Install
 
 You must have **Node.js 20+** installed (<https://nodejs.org/>).

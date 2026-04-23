@@ -185,9 +185,12 @@ function submitDDAnswer() {
             v-model="answer"
             placeholder="Type your answer…"
             @keyup.enter="submitDDAnswer"
+            :disabled="store.isChecking"
             autofocus
           />
-          <button class="submit-btn" @click="submitDDAnswer">Submit</button>
+          <button class="submit-btn" :disabled="store.isChecking" @click="submitDDAnswer">
+            {{ store.isChecking ? 'Checking…' : 'Submit' }}
+          </button>
         </div>
         <p v-else class="waiting">{{ store.currentTurnName }} is answering…</p>
       </template>
@@ -232,10 +235,14 @@ function submitDDAnswer() {
                 v-model="answer"
                 placeholder="Type your answer…"
                 @keyup.enter="submitAnswer"
+                :disabled="store.isChecking"
                 autofocus
               />
-              <button class="submit-btn" @click="submitAnswer">Submit</button>
+              <button class="submit-btn" :disabled="store.isChecking" @click="submitAnswer">
+                {{ store.isChecking ? 'Checking…' : 'Submit' }}
+              </button>
             </div>
+            <p v-else-if="store.isChecking" class="hint">Checking answer…</p>
             <p v-else class="hint">Waiting for answer…</p>
           </template>
         </div>
