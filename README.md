@@ -245,3 +245,11 @@ jeopardy-game/
 - **Blank page after pasting config** — Open the browser console
   (`F12`). Most errors point straight at the line in `src/firebase.js`
   you need to fix.
+
+---
+
+## Credits
+
+Built by Nathan Jones with contributions from Claude AI (Gemini API integration, answer checking, and clue generation).
+
+Special thanks to all players and testers who helped shape the game experience.
