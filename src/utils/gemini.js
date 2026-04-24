@@ -8,7 +8,7 @@ function ensureKey() {
   if (!API_KEY) throw new GeminiUnavailableError('VITE_GEMINI_API_KEY missing');
 }
 
-async function callGemini(body, { timeoutMs = 8000 } = {}) {
+async function callGemini(body, { timeoutMs = 30000 } = {}) {
   ensureKey();
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -31,37 +31,65 @@ function extractText(resp) {
 }
 
 /**
- * Generate a batch of clues. Input: array of { id, term, category }.
- * Returns: map of id -> { definition, scenario }.
+ * One-shot call that produces every piece of content a round needs.
+ *
+ * Inputs:
+ *   clueTerms: array of { id, term, category } that need clue text generated.
+ *     (May be empty if everything is already cached.)
+ *   categories: array of raw category names that need a Jeopardy-style label.
+ *
+ * Returns:
+ *   {
+ *     categories: { [rawCategory]: "JEOPARDY-STYLE TITLE", ... },
+ *     clues: { [id]: { definition, scenario, acceptableAnswers: [...] } }
+ *   }
  */
-export async function generateCluesBatch(items) {
-  if (!items.length) return {};
-  const list = items
-    .map(t => `- id=${t.id} | term="${t.term}" | category="${t.category}"`)
+export async function generateGameContent({ clueTerms, categories }) {
+  if (!clueTerms.length && !categories.length) {
+    return { categories: {}, clues: {} };
+  }
+
+  const termList = clueTerms
+    .map(t => `  - id=${t.id} | term="${t.term}" | raw_category="${t.category}"`)
     .join('\n');
+  const catList = categories.map(c => `  - "${c}"`).join('\n');
 
-  const prompt = `You are writing Jeopardy-style clues for a Computer Science vocabulary game.
+  const prompt = `You are preparing content for a Jeopardy-style Computer Science vocabulary game. Respond with STRICT JSON only — no prose, no code fences.
 
-For each term below, produce:
-- "definition": ONE crisp textbook-style sentence defining it.
-- "scenario": ONE sentence describing a concrete coding situation. It MUST uniquely identify this term — no other CS concept should plausibly fit. Name a signature keyword, syntax, or mechanism.
+Produce TWO things:
 
-Rules:
-- Never use the term itself (or an obvious inflection) in either field.
-- Keep each under 30 words.
+1) category_labels: For each raw category below, invent a short Jeopardy-style title (PUNNY, PLAYFUL, ALL CAPS, <= 5 words) that clearly hints at the theme. Examples of the style: "IT'S ALL OBJECT-ORIENTED", "BYTE-SIZED BASICS", "LOOPY LOGIC", "DATA-BASE JUMPERS". Keep it recognizable.
+
+Raw categories:
+${catList || '  (none)'}
+
+2) clues: For each term below, produce:
+   - "definition": ONE crisp textbook-style sentence.
+   - "scenario": ONE sentence describing a concrete coding situation that uniquely identifies this term. Name a signature keyword, syntax, or mechanism so NO OTHER CS concept could plausibly fit.
+   - "acceptable_answers": array of strings. Include the canonical term plus every reasonable synonym, abbreviation, and alternate phrasing a player might type (e.g. "OOP" and "object-oriented programming", "FP" and "functional programming", "recursion" and "recursive function"). Aim for 3–7 entries. Do not include wrong/related concepts.
+
+Rules for definition and scenario:
+   - Do not use the canonical term itself (or a trivial inflection) inside the definition or scenario text.
+   - Under 30 words each.
 
 Terms:
-${list}
+${termList || '  (none)'}
 
-Respond with STRICT JSON: an array of objects { "id": <number>, "definition": "...", "scenario": "..." }. No prose, no code fences.`;
+Respond with exactly this JSON shape:
+{
+  "category_labels": { "<raw_category>": "<JEOPARDY TITLE>", ... },
+  "clues": [
+    { "id": <number>, "definition": "...", "scenario": "...", "acceptable_answers": ["...", "..."] }
+  ]
+}`;
 
   const resp = await callGemini({
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: 'application/json',
-      temperature: 0.7
+      temperature: 0.8
     }
-  }, { timeoutMs: 20000 });
+  }, { timeoutMs: 30000 });
 
   const text = extractText(resp).trim();
   let parsed;
@@ -70,43 +98,32 @@ Respond with STRICT JSON: an array of objects { "id": <number>, "definition": ".
   } catch {
     throw new GeminiUnavailableError('Failed to parse Gemini JSON');
   }
-  if (!Array.isArray(parsed)) throw new GeminiUnavailableError('Expected array');
 
-  const out = {};
-  for (const row of parsed) {
-    if (row && row.id != null && row.definition && row.scenario) {
-      out[row.id] = {
-        definition: String(row.definition).trim(),
-        scenario: String(row.scenario).trim()
-      };
+  const catLabels = {};
+  if (parsed.category_labels && typeof parsed.category_labels === 'object') {
+    for (const [k, v] of Object.entries(parsed.category_labels)) {
+      if (v) catLabels[k] = String(v).trim();
     }
   }
-  return out;
-}
 
-/**
- * Judge whether a submitted answer is acceptable given the clue+canonical term.
- * Returns true/false. Throws GeminiUnavailableError on failure/timeout — caller
- * should treat that as "wrong" (fall back to local result).
- */
-export async function judgeAnswer({ submitted, term, clueText }) {
-  const prompt = `You are adjudicating a Jeopardy-style game answer.
+  const clues = {};
+  if (Array.isArray(parsed.clues)) {
+    for (const row of parsed.clues) {
+      if (!row || row.id == null) continue;
+      const answers = Array.isArray(row.acceptable_answers)
+        ? row.acceptable_answers.map(s => String(s).trim()).filter(Boolean)
+        : [];
+      if (row.definition && row.scenario) {
+        clues[row.id] = {
+          definition: String(row.definition).trim(),
+          scenario: String(row.scenario).trim(),
+          acceptableAnswers: answers
+        };
+      }
+    }
+  }
 
-Clue: "${clueText}"
-Canonical answer: "${term}"
-Player answered: "${submitted}"
-
-Is the player's answer an acceptable synonym or alternate phrasing for the canonical answer, in the context of the clue? Accept close synonyms, common abbreviations, and reasonable alternate terminology. Reject unrelated or wrong concepts.
-
-Reply with exactly one word: YES or NO.`;
-
-  const resp = await callGemini({
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.0, maxOutputTokens: 5 }
-  }, { timeoutMs: 2500 });
-
-  const text = extractText(resp).trim().toUpperCase();
-  return text.startsWith('YES');
+  return { categories: catLabels, clues };
 }
 
 export function geminiEnabled() {

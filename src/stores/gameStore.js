@@ -14,10 +14,8 @@ import { db } from '../firebase.js';
 import { terms } from '../data/terms.js';
 import { checkAnswer } from '../utils/answerChecker.js';
 import {
-  generateCluesBatch,
-  judgeAnswer,
-  geminiEnabled,
-  GeminiUnavailableError
+  generateGameContent,
+  geminiEnabled
 } from '../utils/gemini.js';
 
 const R1_VALUES = [200, 400, 600, 800, 1000];
@@ -68,6 +66,7 @@ async function writeCachedClues(map) {
   for (const [id, v] of Object.entries(map)) {
     updates[`cluesCache/${id}/definition`] = v.definition;
     updates[`cluesCache/${id}/scenario`] = v.scenario;
+    updates[`cluesCache/${id}/acceptableAnswers`] = v.acceptableAnswers || [];
     updates[`cluesCache/${id}/generatedAt`] = Date.now();
   }
   if (Object.keys(updates).length) {
@@ -75,34 +74,52 @@ async function writeCachedClues(map) {
   }
 }
 
-async function resolveClueContent(pickedTerms) {
-  // pickedTerms: array of term objects. Returns map id -> { definition, scenario }.
+/**
+ * One-shot resolver: returns clue content (definition, scenario, acceptable
+ * answers) for every picked term AND a Jeopardy-style label for each raw
+ * category. Uses the Firebase cache for clues that were generated in a
+ * previous game; anything missing is filled by a single Gemini call that
+ * also supplies fresh category labels.
+ */
+async function resolveGameContent(pickedTerms, rawCategories) {
   const ids = pickedTerms.map(t => t.id);
   const cached = await fetchCachedClues(ids);
   const missing = pickedTerms.filter(t => !cached[t.id]);
 
-  let generated = {};
-  if (missing.length && geminiEnabled()) {
+  let generated = { categories: {}, clues: {} };
+  if (geminiEnabled() && (missing.length || rawCategories.length)) {
     try {
-      generated = await generateCluesBatch(
-        missing.map(t => ({ id: t.id, term: t.term, category: t.category }))
-      );
-      if (Object.keys(generated).length) await writeCachedClues(generated);
+      generated = await generateGameContent({
+        clueTerms: missing.map(t => ({ id: t.id, term: t.term, category: t.category })),
+        categories: rawCategories
+      });
+      if (Object.keys(generated.clues).length) {
+        await writeCachedClues(generated.clues);
+      }
     } catch (e) {
-      // Swallow — fall back to static content
-      generated = {};
+      generated = { categories: {}, clues: {} };
     }
   }
 
-  const result = {};
+  const clueContent = {};
   for (const t of pickedTerms) {
-    const c = cached[t.id] || generated[t.id];
-    result[t.id] = {
+    const c = cached[t.id] || generated.clues[t.id];
+    const acceptable = (c?.acceptableAnswers && c.acceptableAnswers.length)
+      ? c.acceptableAnswers
+      : [t.term];
+    clueContent[t.id] = {
       definition: c?.definition || t.definition,
-      scenario: c?.scenario || t.scenario || t.definition
+      scenario: c?.scenario || t.scenario || t.definition,
+      acceptableAnswers: acceptable
     };
   }
-  return result;
+
+  const categoryLabels = {};
+  for (const cat of rawCategories) {
+    categoryLabels[cat] = generated.categories[cat] || cat;
+  }
+
+  return { clues: clueContent, categories: categoryLabels };
 }
 
 async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
@@ -117,10 +134,12 @@ async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
 
   const picksPerCat = chosen.map(cat => shuffle(byCat[cat]).slice(0, 5));
   const allPicks = picksPerCat.flat();
-  const content = await resolveClueContent(allPicks);
+  const { clues: content, categories: catLabels } =
+    await resolveGameContent(allPicks, chosen);
 
   const board = chosen.map((cat, ci) => {
     const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
+    const jeopardyCategory = catLabels[cat] || cat;
     const clues = picksPerCat[ci].map((t, i) => {
       const c = content[t.id];
       return {
@@ -128,14 +147,16 @@ async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
         term: t.term,
         definition: c.definition,
         scenario: c.scenario,
+        acceptableAnswers: c.acceptableAnswers,
         played: false,
         dailyDouble: false
       };
     });
     return {
       category: cat,
+      jeopardyCategory,
       variant,
-      label: variantLabel(cat, variant),
+      label: variantLabel(jeopardyCategory, variant),
       clues
     };
   });
@@ -511,8 +532,9 @@ export const useGameStore = defineStore('game', {
         : shuffle(Object.keys(byCat))[0];
       const clue = shuffle(byCat[cat])[0];
       const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
-      const resolved = await resolveClueContent([clue]);
-      const content = resolved[clue.id];
+      const resolved = await resolveGameContent([clue], [cat]);
+      const content = resolved.clues[clue.id];
+      const jeopardyCategory = resolved.categories[cat] || cat;
 
       await update(dbRef(db, `rooms/${this.roomCode}`), {
         round: 3,
@@ -520,9 +542,11 @@ export const useGameStore = defineStore('game', {
         activeClue: null,
         final: {
           category: cat,
-          categoryLabel: variantLabel(cat, variant),
+          jeopardyCategory,
+          categoryLabel: variantLabel(jeopardyCategory, variant),
           variant,
           term: clue.term,
+          acceptableAnswers: content.acceptableAnswers,
           definition: content.definition,
           scenario: content.scenario,
           phase: 'category',
@@ -569,24 +593,17 @@ export const useGameStore = defineStore('game', {
       });
     },
 
-    async _adjudicate(submitted, ac) {
-      // Returns true if the submitted answer should be treated as correct.
-      // Fast-path with local checker; fall back to Gemini for near-misses.
+    _adjudicate(submitted, ac) {
+      // Local-only: try every acceptable answer Gemini provided at game start.
+      // Falls back to the canonical term if no list is present.
       if (!submitted) return false;
-      if (checkAnswer(submitted, ac.term)) return true;
-      if (submitted.trim().length < 3) return false;
-      if (!geminiEnabled()) return false;
-      const clueText = (ac.variant === 'scenarios')
-        ? (ac.scenario || ac.definition)
-        : ac.definition;
-      this.isChecking = true;
-      try {
-        return await judgeAnswer({ submitted, term: ac.term, clueText });
-      } catch (e) {
-        return false;
-      } finally {
-        this.isChecking = false;
+      const answers = (ac.acceptableAnswers && ac.acceptableAnswers.length)
+        ? ac.acceptableAnswers
+        : [ac.term];
+      for (const a of answers) {
+        if (checkAnswer(submitted, a)) return true;
       }
+      return false;
     },
 
     _scoreDeltaUpdates(playerId, delta) {
@@ -800,7 +817,8 @@ export const useGameStore = defineStore('game', {
         term: final.term,
         variant: final.variant,
         definition: final.definition,
-        scenario: final.scenario
+        scenario: final.scenario,
+        acceptableAnswers: final.acceptableAnswers
       };
 
       if (this.room?.teamsMode) {
