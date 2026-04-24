@@ -5,8 +5,15 @@ A multiplayer online Jeopardy web app. Players join from different devices
 
 All 200 Jeopardy clues are drawn from a Computer Science technical-terms
 vocabulary list, spread across 15 topic categories. Each game picks 6
-random categories with 5 clues each ($200 through $1000), just like a real
-Jeopardy board.
+random categories with 5 clues each ($200 through $1000) for Regular Jeopardy,
+then 5 doubled values ($400–$2000) for Double Jeopardy, followed by Final Jeopardy.
+
+**Features:**
+- **Individual or Teams mode** — play solo or organize into teams with captains
+- **Three rounds** — Regular Jeopardy, Double Jeopardy (with 2 Daily Doubles), and Final Jeopardy
+- **Daily Doubles** — wager-based power plays during rounds 1 and 2
+- **Live multiplayer** — all game state syncs in real-time across all connected players
+- **Gemini AI integration** (optional) — generates intelligent clue variants and checks answers for acceptable synonyms
 
 Built with:
 
@@ -15,19 +22,32 @@ Built with:
 - **Vue Router** — navigation between Home, Lobby, Game, Game Over
 - **Pinia** — local state management
 - **Firebase Realtime Database** — live multiplayer state sync
+- **Google Gemini API** (optional) — AI clue generation and intelligent answer checking
 
 ---
 
-## Gemini API (optional, for smart clues + answer checking)
+## Gemini API (optional, for AI-powered clues + answer checking)
 
 Set `VITE_GEMINI_API_KEY` in a local `.env` (copy from `.env.example`) to enable:
 
-- Tighter, unambiguous scenario/definition clues generated per term and cached in Firebase (`cluesCache/<termId>`).
-- Smart synonym checking: if the local checker marks an answer wrong, Gemini adjudicates whether it's an acceptable alternate phrasing before penalizing.
+- **Intelligent clue generation**: Full game content (categories and scenario/definition clues) is generated in one Gemini call per round, then cached in Firebase (`cluesCache/<termId>`).
+- **Smart synonym checking**: If the local fuzzy checker marks an answer wrong, Gemini adjudicates whether it's an acceptable alternate phrasing before penalizing the player.
+- **Clue variant support**: Each clue is available in multiple formats (definition-only, scenario-based, or both).
 
 Without a key, the game falls back to the static clues in `src/data/terms.js` and the local fuzzy checker — everything still works.
 
-For CI/deploy, put the key in the repo secret `GEMINI_API_KEY`; the GitHub Actions workflow injects it at build time. Restrict the key in Google Cloud Console (HTTP referrer → your Pages URL; daily quota cap) since Vite bundles the value into the client JS.
+### For local development
+
+Set `VITE_GEMINI_API_KEY` in a local `.env` file:
+```env
+VITE_GEMINI_API_KEY=your-api-key-here
+```
+
+### For GitHub Pages deployment
+
+Add the key to your repo as a GitHub secret named `GEMINI_API_KEY`. The GitHub Actions workflow automatically injects it at build time. The key is bundled into the client JS, so restrict it in Google Cloud Console:
+- HTTP referrer: your Pages domain (e.g., `https://yourname.github.io`)
+- Set a daily quota cap to prevent accidental overages.
 
 ---
 
@@ -143,14 +163,15 @@ To play **across the internet** you need to host the built app somewhere
      code to share.
    - Joining asks for the 4-letter code + your name.
 2. **Lobby** — the host sees the code at the top. All joined players
-   appear live. Only the host sees the **Start Game** button.
+   appear live. The host can switch between **individual** and **teams** mode before starting. In teams mode, the host assigns players to teams with team-specific colors. Only the host sees the **Start Game** button.
 3. **Game** — the classic 6×5 board appears. The host clicks a tile to
-   reveal the clue (a CS term definition). Any player can hit the red
+   reveal the clue (a CS term definition). Any player (or team captain, if in teams mode) can hit the red
    **BUZZ IN** button. The first buzz wins (Firebase decides by
    first-write). The buzzed player types the term. The host marks the
    answer **Correct** (+value) or **Incorrect** (−value), or **Skip** if
-   no one knows. The tile greys out and play continues.
-4. **Game Over** — when all 30 tiles are played, everyone is sent to the
+   no one knows. The tile greys out and play continues. In teams mode, the team captain answers and the wager applies to the whole team score.
+4. **Final Jeopardy** — after Regular Jeopardy and Double Jeopardy are complete, a single clue appears in Final Jeopardy. All players (or team captains) see a category, submit a secret wager, then provide their answer. Scores are revealed and updated. In teams mode, only team captains can wager and answer.
+5. **Game Over** — when all rounds are complete, everyone is sent to the
    final-score screen. The host can start a new game.
 
 ---
