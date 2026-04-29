@@ -8,22 +8,42 @@ function ensureKey() {
   if (!API_KEY) throw new GeminiUnavailableError('VITE_GEMINI_API_KEY missing');
 }
 
-async function callGemini(body, { timeoutMs = 30000 } = {}) {
+async function callGemini(body, { timeoutMs = 30000, maxRetries = 3 } = {}) {
   ensureKey();
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${BASE}?key=${encodeURIComponent(API_KEY)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    if (!res.ok) throw new GeminiUnavailableError(`Gemini HTTP ${res.status}`);
-    return await res.json();
-  } finally {
-    clearTimeout(t);
+
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${BASE}?key=${encodeURIComponent(API_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (res.ok) return await res.json();
+
+      // Retry on transient overload/rate-limit; fail fast on everything else.
+      if (res.status !== 503 && res.status !== 429) {
+        throw new GeminiUnavailableError(`Gemini HTTP ${res.status}`);
+      }
+      lastErr = new GeminiUnavailableError(`Gemini HTTP ${res.status}`);
+    } catch (err) {
+      if (err instanceof GeminiUnavailableError && !String(err.message).match(/HTTP (503|429)/)) {
+        throw err;
+      }
+      lastErr = err;
+    } finally {
+      clearTimeout(t);
+    }
+
+    if (attempt < maxRetries) {
+      const backoff = 1000 * 2 ** attempt + Math.random() * 250;
+      await new Promise(r => setTimeout(r, backoff));
+    }
   }
+  throw lastErr || new GeminiUnavailableError('Gemini failed after retries');
 }
 
 function extractText(resp) {
