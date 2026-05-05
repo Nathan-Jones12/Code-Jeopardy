@@ -80,14 +80,32 @@ Audience: full-stack web bootcamp students. They know HTML, CSS, and JavaScript 
 
 Produce TWO things:
 
-1) category_labels: For each raw category below, invent a short Jeopardy-style title (PUNNY, PLAYFUL, ALL CAPS, <= 5 words) that clearly hints at the theme. Examples of the style: "IT'S ALL OBJECT-ORIENTED", "BYTE-SIZED BASICS", "LOOPY LOGIC", "DATA-BASE JUMPERS". Keep it recognizable.
+1) category_labels: For each raw category below, invent a short title in the style of REAL Jeopardy categories — PUNNY, PLAYFUL, ALL CAPS, ≤ 5 words — that hints at the theme through wordplay or a clever angle, NOT just a louder version of the topic name.
+
+   Good examples (do this kind of thing):
+   - Git → "GIT 'ER DONE", "BRANCH MANAGERS", "COMMIT-MENT ISSUES"
+   - HTTP/Networking → "GET OFF MY LAWN", "STATUS UPDATES", "HEADER NEWS"
+   - Backend/APIs → "REST FOR THE WEARY", "ROUTE 66", "ENDPOINT BLANK"
+   - Databases → "TABLE FOR ONE", "JOIN THE CLUB", "PRIMARY CONCERNS"
+   - Auth/Security → "ACCESS DENIED", "TOKEN OF APPRECIATION", "PASS-THE-WORD"
+   - Frontend → "STATE OF THE ART", "PROPS TO YOU", "HOOK, LINE & SINKER"
+   - DevOps → "SHIP HAPPENS", "DEPLOY OR DIE", "PIPELINE DREAMS"
+
+   Bad examples (do NOT do this):
+   - "DATABASES 101" (too literal)
+   - "ALL ABOUT GIT" (no wordplay)
+   - "JAVASCRIPT STUFF" (lazy)
+   - "HTML AND CSS" (just the topic)
+   - "GIT IN 2005" or "WEB 2.0 ERA" (NEVER use specific dates, years, version numbers, or "the era of X" — coding terms are timeless and dates aren't useful)
+
+   Each label should be guessable from its theme but feel like it could appear on the actual Jeopardy show.
 
 Raw categories:
 ${catList || '  (none)'}
 
 2) clues: For each term below, produce:
    - "definition": ONE crisp textbook-style sentence that names at least one distinctive identifying detail — a signature keyword, syntax form, library, file/config name, observable behavior, or characteristic use case — so the answer is unambiguous even without the term being mentioned.
-   - "scenario": ONE sentence describing a concrete coding situation that uniquely identifies this term. Name a signature keyword, syntax, library, command, error, or mechanism so NO OTHER web-dev concept could plausibly fit.
+   - "scenario": ONE sentence describing a small, concrete moment in a developer's day that points unambiguously at this term. Anchor it in something specific and named — a command typed in the terminal, a file or config opened, a button clicked in a tool, an error message seen, a line of code observed. The sentence should read like a natural mini-story, NOT like a riddle or a contorted definition. If the no-leak rule (below) makes the most natural phrasing impossible, rewrite the whole scenario from a different angle rather than producing awkward wording. Prefer second-person ("You..." or "Your...") for immediacy. Examples of the right feel: "You type 'git log' and the topmost entry has an arrow indicating the tip of your current branch." / "DevTools shows a 404 for '/api/cat' after your fetch call returns an error code."
    - "acceptable_answers": array of strings. Include the canonical term plus every reasonable synonym, abbreviation, and alternate phrasing a player might type (e.g. "PR" and "pull request", "env var" and "environment variable", "auth" and "authentication"). Aim for 3–7 entries. Do not include wrong/related concepts.
 
 CRITICAL — the no-leak rule (this is the single most important constraint):
