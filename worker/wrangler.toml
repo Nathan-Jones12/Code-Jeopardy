@@ -1,0 +1,11 @@
+name = "jeopardy-claude"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Set the Anthropic API key as a secret (not committed):
+#   wrangler secret put ANTHROPIC_API_KEY
+#
+# Optionally restrict which origins can call this worker by editing
+# ALLOWED_ORIGINS below. Defaults to localhost dev + the GitHub Pages site.
+[vars]
+ALLOWED_ORIGINS = "http://localhost:5173,https://nathan-jones12.github.io"

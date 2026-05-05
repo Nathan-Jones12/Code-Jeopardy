@@ -15,8 +15,8 @@ import { terms } from '../data/terms.js';
 import { checkAnswer } from '../utils/answerChecker.js';
 import {
   generateGameContent,
-  geminiEnabled
-} from '../utils/gemini.js';
+  claudeEnabled
+} from '../utils/claude.js';
 
 const R1_VALUES = [200, 400, 600, 800, 1000];
 const R2_VALUES = [400, 800, 1200, 1600, 2000];
@@ -78,7 +78,7 @@ async function writeCachedClues(map) {
  * One-shot resolver: returns clue content (definition, scenario, acceptable
  * answers) for every picked term AND a Jeopardy-style label for each raw
  * category. Uses the Firebase cache for clues that were generated in a
- * previous game; anything missing is filled by a single Gemini call that
+ * previous game; anything missing is filled by a single Claude call that
  * also supplies fresh category labels.
  */
 async function resolveGameContent(pickedTerms, rawCategories) {
@@ -87,7 +87,7 @@ async function resolveGameContent(pickedTerms, rawCategories) {
   const missing = pickedTerms.filter(t => !cached[t.id]);
 
   let generated = { categories: {}, clues: {} };
-  if (geminiEnabled() && (missing.length || rawCategories.length)) {
+  if (claudeEnabled() && (missing.length || rawCategories.length)) {
     try {
       generated = await generateGameContent({
         clueTerms: missing.map(t => ({ id: t.id, term: t.term, category: t.category })),
@@ -594,7 +594,7 @@ export const useGameStore = defineStore('game', {
     },
 
     _adjudicate(submitted, ac) {
-      // Local-only: try every acceptable answer Gemini provided at game start.
+      // Local-only: try every acceptable answer Claude provided at game start.
       // Falls back to the canonical term if no list is present.
       if (!submitted) return false;
       const answers = (ac.acceptableAnswers && ac.acceptableAnswers.length)
@@ -887,6 +887,13 @@ export const useGameStore = defineStore('game', {
       }
 
       await update(dbRef(db, `rooms/${this.roomCode}`), updates);
+    },
+
+    async clearAiCache() {
+      if (!this.isHost) return;
+      try {
+        await remove(dbRef(db, 'cluesCache'));
+      } catch (_) { /* ignore */ }
     },
 
     async leaveRoom() {

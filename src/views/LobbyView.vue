@@ -77,6 +77,12 @@ function leave() {
   router.push({ name: 'home' });
 }
 
+async function clearCache() {
+  if (!confirm('Wipe all cached AI-generated clues? Next game will regenerate everything fresh.')) return;
+  await store.clearAiCache();
+  alert('AI clue cache cleared.');
+}
+
 function copyCode() {
   navigator.clipboard?.writeText(props.roomCode);
 }
@@ -204,6 +210,12 @@ function copyCode() {
         @click="start"
       >Start Game</button>
       <p v-else class="waiting">Waiting for host to start the game…</p>
+      <button
+        v-if="store.isHost"
+        class="leave-btn"
+        @click="clearCache"
+        title="Wipe Firebase cluesCache so the next game regenerates clues from scratch"
+      >Clear AI Cache</button>
       <button class="leave-btn" @click="leave">Leave</button>
     </div>
   </div>

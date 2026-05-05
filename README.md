@@ -1,19 +1,21 @@
-# Jeopardy! — Computer Science Edition
+# Jeopardy! — Full-Stack Web Edition
 
 A multiplayer online Jeopardy web app. Players join from different devices
 (laptop, phone, anything with a browser) using a 4-letter room code.
 
-All 200 Jeopardy clues are drawn from a Computer Science technical-terms
-vocabulary list, spread across 15 topic categories. Each game picks 6
-random categories with 5 clues each ($200 through $1000) for Regular Jeopardy,
-then 5 doubled values ($400–$2000) for Double Jeopardy, followed by Final Jeopardy.
+All 140 Jeopardy clues are drawn from a full-stack web-development
+vocabulary list (Git, DevOps, Databases, Frontend, Backend, HTML/CSS,
+JavaScript, HTTP, Auth, Testing, Cloud, and more) spread across 14 topic
+categories. Each game picks 6 random categories with 5 clues each ($200
+through $1000) for Regular Jeopardy, then 5 doubled values ($400–$2000)
+for Double Jeopardy, followed by Final Jeopardy.
 
 **Features:**
 - **Individual or Teams mode** — play solo or organize into teams with captains
 - **Three rounds** — Regular Jeopardy, Double Jeopardy (with 2 Daily Doubles), and Final Jeopardy
 - **Daily Doubles** — wager-based power plays during rounds 1 and 2
 - **Live multiplayer** — all game state syncs in real-time across all connected players
-- **Gemini AI integration** (optional) — generates intelligent clue variants and checks answers for acceptable synonyms
+- **Claude AI integration** (optional) — generates intelligent clue variants and checks answers for acceptable synonyms
 
 Built with:
 
@@ -22,32 +24,48 @@ Built with:
 - **Vue Router** — navigation between Home, Lobby, Game, Game Over
 - **Pinia** — local state management
 - **Firebase Realtime Database** — live multiplayer state sync
-- **Google Gemini API** (optional) — AI clue generation and intelligent answer checking
+- **Anthropic Claude API** (optional, via Cloudflare Worker proxy) — AI clue generation and intelligent answer checking
 
 ---
 
-## Gemini API (optional, for AI-powered clues + answer checking)
+## Claude API (optional, for AI-powered clues + answer checking)
 
-Set `VITE_GEMINI_API_KEY` in a local `.env` (copy from `.env.example`) to enable:
+The game can call Anthropic's Claude (`claude-haiku-4-5`) to generate Jeopardy-style category titles, definitions, scenarios, and acceptable-answer synonyms once per round, cached in Firebase. The client never sees your Anthropic API key — calls go through a tiny Cloudflare Worker proxy that holds the key as a server-side secret.
 
-- **Intelligent clue generation**: Full game content (categories and scenario/definition clues) is generated in one Gemini call per round, then cached in Firebase (`cluesCache/<termId>`).
-- **Smart synonym checking**: If the local fuzzy checker marks an answer wrong, Gemini adjudicates whether it's an acceptable alternate phrasing before penalizing the player.
+- **Intelligent clue generation**: Full game content (categories and scenario/definition clues) is generated in one Claude call per round, then cached in Firebase (`cluesCache/<termId>`).
+- **Smart synonym checking**: At game start, Claude provides an `acceptableAnswers` list per term. The local fuzzy checker uses that list when adjudicating player submissions.
 - **Clue variant support**: Each clue is available in multiple formats (definition-only, scenario-based, or both).
 
-Without a key, the game falls back to the static clues in `src/data/terms.js` and the local fuzzy checker — everything still works.
+Without the proxy URL set, the game falls back to the static clues in `src/data/terms.js` and the local fuzzy checker — everything still works.
 
-### For local development
+### Step 1 — Deploy the Cloudflare Worker
 
-Set `VITE_GEMINI_API_KEY` in a local `.env` file:
-```env
-VITE_GEMINI_API_KEY=your-api-key-here
+Get an Anthropic API key from <https://console.anthropic.com/> (starts with `sk-ant-`).
+
+```bash
+cd worker
+npm install
+npx wrangler login
+npx wrangler secret put ANTHROPIC_API_KEY    # paste your sk-ant-... key
+npx wrangler deploy
 ```
 
-### For GitHub Pages deployment
+Wrangler prints a URL like `https://jeopardy-claude.<your-subdomain>.workers.dev`. Copy it — that's your `VITE_CLAUDE_PROXY_URL`.
 
-Add the key to your repo as a GitHub secret named `GEMINI_API_KEY`. The GitHub Actions workflow automatically injects it at build time. The key is bundled into the client JS, so restrict it in Google Cloud Console:
-- HTTP referrer: your Pages domain (e.g., `https://yourname.github.io`)
-- Set a daily quota cap to prevent accidental overages.
+If your GitHub Pages site lives somewhere other than `https://nathan-jones12.github.io`, edit `worker/wrangler.toml` and update `ALLOWED_ORIGINS` before deploying.
+
+### Step 2a — For local development
+
+Set the proxy URL in a local `.env` file (copy from `.env.example`):
+```env
+VITE_CLAUDE_PROXY_URL=https://jeopardy-claude.<your-subdomain>.workers.dev
+```
+
+You can also run the worker locally with `cd worker && npx wrangler dev` and point the client at `http://localhost:8787`. To make the local worker see your key, create `worker/.dev.vars` containing `ANTHROPIC_API_KEY=sk-ant-...` (already gitignored).
+
+### Step 2b — For GitHub Pages deployment
+
+Add the worker URL to your repo as a **variable** (not a secret) named `CLAUDE_PROXY_URL` under *Settings → Secrets and variables → Actions → Variables*. The GitHub Actions workflow injects it at build time. The URL is non-sensitive — only the Anthropic key inside the worker is.
 
 ---
 
@@ -250,6 +268,6 @@ jeopardy-game/
 
 ## Credits
 
-Built by Nathan Jones with contributions from Claude AI (Gemini API integration, answer checking, and clue generation).
+Built by Nathan Jones with contributions from Claude AI (Claude API integration, answer checking, and clue generation).
 
 Special thanks to all players and testers who helped shape the game experience.
