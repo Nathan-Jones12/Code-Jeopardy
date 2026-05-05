@@ -61,7 +61,7 @@ function stripFences(s) {
  * Returns:
  *   {
  *     categories: { [rawCategory]: "JEOPARDY-STYLE TITLE", ... },
- *     clues: { [id]: { definition, scenario, acceptableAnswers: [...] } }
+ *     clues: { [id]: { clue, acceptableAnswers: [...] } }
  *   }
  */
 export async function generateGameContent({ clueTerms, categories }) {
@@ -103,20 +103,29 @@ Produce TWO things:
 Raw categories:
 ${catList || '  (none)'}
 
-2) clues: For each term below, produce:
-   - "definition": ONE crisp textbook-style sentence that names at least one distinctive identifying detail — a signature keyword, syntax form, library, file/config name, observable behavior, or characteristic use case — so the answer is unambiguous even without the term being mentioned.
-   - "scenario": ONE sentence describing a small, concrete moment in a developer's day that points unambiguously at this term. Anchor it in something specific and named — a command typed in the terminal, a file or config opened, a button clicked in a tool, an error message seen, a line of code observed. The sentence should read like a natural mini-story, NOT like a riddle or a contorted definition. If the no-leak rule (below) makes the most natural phrasing impossible, rewrite the whole scenario from a different angle rather than producing awkward wording. Prefer second-person ("You..." or "Your...") for immediacy. Examples of the right feel: "You type 'git log' and the topmost entry has an arrow indicating the tip of your current branch." / "DevTools shows a 404 for '/api/cat' after your fetch call returns an error code."
+2) clues: For each term below, produce ONE "clue" — a single sentence that points unambiguously at the answer. Like real Jeopardy, VARY the style across the 5 clues that share a category so the column doesn't feel monotonous. Pick whichever style fits each term best from this menu:
+
+   a) Workflow moment — "You push to main and watch GitHub Actions run your tests and deploy to Vercel automatically." (best for tools, workflows)
+   b) Direct description — "An open standard for delegated authorization that lets users grant apps access to their data on another service." (best for abstract concepts)
+   c) Developer-quote / overheard — "After login the server sets a 'Bearer ___' header that the client attaches to every subsequent request." (best for protocols, headers, tokens)
+   d) First-person riddle — "I'm the small text file the browser sends back automatically with every request to the domain that set me." (best for things with personality)
+   e) Symptom / debugging moment — "Your styles aren't applying because an earlier rule with an ID selector outranks your class selector for the same element." (best for browser/CSS quirks)
+   f) Wordplay tease — "If a function had a memory, it would remember the variables in the scope where it was born." (best for evocative, metaphor-friendly terms)
+   g) Command-line snippet — "You run this in the terminal with a name argument and Git creates a new line of work pointing at the same commit as main." (best for commands)
+
+   Aim for roughly even spread of styles within each category. Don't use the same style for all 5 clues in a column.
+
    - "acceptable_answers": array of strings. Include the canonical term plus every reasonable synonym, abbreviation, and alternate phrasing a player might type (e.g. "PR" and "pull request", "env var" and "environment variable", "auth" and "authentication"). Aim for 3–7 entries. Do not include wrong/related concepts.
 
 CRITICAL — the no-leak rule (this is the single most important constraint):
-   - The definition AND the scenario must NEVER contain the canonical term, any of its words taken individually, or any inflection/variant of those words. This applies to BOTH fields.
+   - The clue must NEVER contain the canonical term, any of its words taken individually, or any inflection/variant of those words.
    - "Inflection or variant" means: plural, singular, possessive, gerund (-ing), past tense, adjective form, abbreviation, expanded acronym, hyphenated split, and any rearrangement.
-   - Example — if the term is "Pull Request": you may NOT write "pull", "pulls", "pulling", "request", "requests", "requesting", "PR", or "pull request" anywhere in either field. Refer to it indirectly: "a GitHub proposal to merge changes…".
+   - Example — if the term is "Pull Request": you may NOT write "pull", "pulls", "pulling", "request", "requests", "requesting", "PR", or "pull request" in the clue. Refer to it indirectly: "a GitHub proposal to merge changes…".
    - Example — if the term is "Closure": you may NOT write "close", "closes", "closing", "closed", or "closure". Use indirect phrasing: "a function that retains access to its outer scope after that scope returns".
    - Example — if the term is "JWT": you may NOT write "JWT", "JSON Web Token", "JSON", "Web", or "Token" individually. Refer indirectly: "a signed, base64-encoded string carrying user claims".
-   - Before emitting each clue, mentally re-read it WITHOUT knowing the answer. If a player familiar with the topic could read it and not be sure which specific concept it refers to, add a more distinctive identifying detail (a specific syntax, library name, file name, error code, or observable side-effect). If the clue accidentally contains the term or one of its words, rewrite it.
+   - Before emitting each clue, mentally re-read it WITHOUT knowing the answer. If a player familiar with the topic could read it and not be sure which specific concept it refers to, add a more distinctive identifying detail (a specific syntax, library name, file name, error code, or observable side-effect). If the clue accidentally contains the term or one of its words, rewrite it from a different angle rather than producing awkward wording.
 
-Length: each field under 30 words.
+Length: clue under 35 words.
 
 Terms:
 ${termList || '  (none)'}
@@ -125,7 +134,7 @@ Respond with exactly this JSON shape:
 {
   "category_labels": { "<raw_category>": "<JEOPARDY TITLE>", ... },
   "clues": [
-    { "id": <number>, "definition": "...", "scenario": "...", "acceptable_answers": ["...", "..."] }
+    { "id": <number>, "clue": "...", "acceptable_answers": ["...", "..."] }
   ]
 }`;
 
@@ -153,10 +162,10 @@ Respond with exactly this JSON shape:
       const answers = Array.isArray(row.acceptable_answers)
         ? row.acceptable_answers.map(s => String(s).trim()).filter(Boolean)
         : [];
-      if (row.definition && row.scenario) {
+      const clueText = row.clue ? String(row.clue).trim() : '';
+      if (clueText) {
         clues[row.id] = {
-          definition: String(row.definition).trim(),
-          scenario: String(row.scenario).trim(),
+          clue: clueText,
           acceptableAnswers: answers
         };
       }

@@ -32,9 +32,7 @@ const categoryName = computed(() => {
 
 const promptText = computed(() => {
   if (!clue.value) return '';
-  return clue.value.variant === 'scenarios'
-    ? (clue.value.scenario || clue.value.definition)
-    : clue.value.definition;
+  return clue.value.clue || '';
 });
 
 const clueValue = computed(() => {

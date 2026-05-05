@@ -33,9 +33,7 @@ const canPlay = computed(() => {
 
 const promptText = computed(() => {
   if (!final.value) return '';
-  return final.value.variant === 'scenarios'
-    ? (final.value.scenario || final.value.definition)
-    : final.value.definition;
+  return final.value.clue || '';
 });
 
 const categoryLabel = computed(() => {

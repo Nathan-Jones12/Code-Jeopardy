@@ -46,10 +46,6 @@ function shuffle(arr) {
   return a;
 }
 
-function variantLabel(category, variant) {
-  return (variant === 'scenarios' ? 'Scenarios: ' : 'Definitions: ') + category;
-}
-
 async function fetchCachedClues(termIds) {
   const out = {};
   await Promise.all(termIds.map(async id => {
@@ -64,8 +60,7 @@ async function fetchCachedClues(termIds) {
 async function writeCachedClues(map) {
   const updates = {};
   for (const [id, v] of Object.entries(map)) {
-    updates[`cluesCache/${id}/definition`] = v.definition;
-    updates[`cluesCache/${id}/scenario`] = v.scenario;
+    updates[`cluesCache/${id}/clue`] = v.clue;
     updates[`cluesCache/${id}/acceptableAnswers`] = v.acceptableAnswers || [];
     updates[`cluesCache/${id}/generatedAt`] = Date.now();
   }
@@ -75,9 +70,8 @@ async function writeCachedClues(map) {
 }
 
 /**
- * One-shot resolver: returns clue content (definition, scenario, acceptable
- * answers) for every picked term AND a Jeopardy-style label for each raw
- * category. Uses the Firebase cache for clues that were generated in a
+ * One-shot resolver: returns the single clue text and acceptable answers for
+ * every picked term AND a Jeopardy-style label for each raw category. Uses the Firebase cache for clues that were generated in a
  * previous game; anything missing is filled by a single Claude call that
  * also supplies fresh category labels.
  */
@@ -108,8 +102,7 @@ async function resolveGameContent(pickedTerms, rawCategories) {
       ? c.acceptableAnswers
       : [t.term];
     clueContent[t.id] = {
-      definition: c?.definition || t.definition,
-      scenario: c?.scenario || t.scenario || t.definition,
+      clue: c?.clue || '',
       acceptableAnswers: acceptable
     };
   }
@@ -138,15 +131,13 @@ async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
     await resolveGameContent(allPicks, chosen);
 
   const board = chosen.map((cat, ci) => {
-    const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
     const jeopardyCategory = catLabels[cat] || cat;
     const clues = picksPerCat[ci].map((t, i) => {
       const c = content[t.id];
       return {
         value: dollarValues[i],
         term: t.term,
-        definition: c.definition,
-        scenario: c.scenario,
+        clue: c.clue,
         acceptableAnswers: c.acceptableAnswers,
         played: false,
         dailyDouble: false
@@ -155,8 +146,7 @@ async function buildBoard(excludeCategories, dollarValues, dailyDoubleCount) {
     return {
       category: cat,
       jeopardyCategory,
-      variant,
-      label: variantLabel(jeopardyCategory, variant),
+      label: jeopardyCategory,
       clues
     };
   });
@@ -275,7 +265,6 @@ export const useGameStore = defineStore('game', {
       return {
         ...ac,
         ...clue,
-        variant: col.variant || 'definitions',
         categoryLabel: col.label || col.category
       };
     },
@@ -531,7 +520,6 @@ export const useGameStore = defineStore('game', {
         ? shuffle(available)[0]
         : shuffle(Object.keys(byCat))[0];
       const clue = shuffle(byCat[cat])[0];
-      const variant = Math.random() < 0.5 ? 'scenarios' : 'definitions';
       const resolved = await resolveGameContent([clue], [cat]);
       const content = resolved.clues[clue.id];
       const jeopardyCategory = resolved.categories[cat] || cat;
@@ -543,12 +531,10 @@ export const useGameStore = defineStore('game', {
         final: {
           category: cat,
           jeopardyCategory,
-          categoryLabel: variantLabel(jeopardyCategory, variant),
-          variant,
+          categoryLabel: jeopardyCategory,
           term: clue.term,
           acceptableAnswers: content.acceptableAnswers,
-          definition: content.definition,
-          scenario: content.scenario,
+          clue: content.clue,
           phase: 'category',
           phaseStartedAt: Date.now(),
           wagers: {},
@@ -815,9 +801,7 @@ export const useGameStore = defineStore('game', {
 
       const finalAc = {
         term: final.term,
-        variant: final.variant,
-        definition: final.definition,
-        scenario: final.scenario,
+        clue: final.clue,
         acceptableAnswers: final.acceptableAnswers
       };
 
